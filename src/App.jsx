@@ -10,6 +10,14 @@ const loadStore = () => {
 const initStore = loadStore();
 const persisted = (key, fallback) => (initStore[key] !== undefined ? initStore[key] : fallback);
 
+// 穩定序列化：將物件 key 依字母排序，令同步比對唔受 Supabase jsonb 重排 key 影響
+function stableStringify(obj) {
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return "[" + obj.map(stableStringify).join(",") + "]";
+  const keys = Object.keys(obj).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
+}
+
 const LOGO = "data:image/png;base64,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";
 
 const DEFAULT_COACHES = [];
@@ -99,18 +107,18 @@ export default function App() {
     (async () => {
       const remote = await cloudLoad();
       if (remote && Object.keys(remote).length) {
-        lastSyncedRef.current = JSON.stringify(remote);
+        lastSyncedRef.current = stableStringify(remote);
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
         const seed = { coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog };
-        lastSyncedRef.current = JSON.stringify(seed);
+        lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
       readyRef.current = true;
       setSyncState("synced");
       unsub = cloudSubscribe((d) => {
-        const s = JSON.stringify(d);
+        const s = stableStringify(d);
         if (s === lastSyncedRef.current) return; // 自己嘅更新，略過
         lastSyncedRef.current = s;
         applyBundle(d);
@@ -128,7 +136,7 @@ export default function App() {
 
     if (!cloudEnabled) return;
     if (!readyRef.current) return; // 首次雲端載入未完成，唔好覆蓋
-    const s = JSON.stringify(bundle);
+    const s = stableStringify(bundle);
     if (s === lastSyncedRef.current) return; // 同雲端一樣，唔使寫
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -292,7 +300,7 @@ export default function App() {
     const coach = getCoach(coachId);
     const amount = qty * coach.rate;
     setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, credits: c.credits + qty } : c));
-    setPurchaseLog((prev) => [{ id: Date.now() + Math.random(), date: new Date().toISOString().slice(0, 10), coachId, coachName: coach.name, qty, amount, rate: coach.rate }, ...prev]);
+    setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: new Date().toISOString().slice(0, 10), coachId, coachName: coach.name, qty, amount, rate: coach.rate }, ...prev]);
     showToast(`已為 ${coach.name} 增加 ${qty} 堂（$${amount}）`);
   };
 
@@ -686,7 +694,7 @@ export default function App() {
                 const color = COLORS[coaches.length % COLORS.length];
                 const initials = clean.name.trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "NA";
                 setCoaches((prev) => [...prev, { ...clean, id: newId, color, initials, used: 0 }]);
-                if (clean.credits > 0) setPurchaseLog((prev) => [{ id: Date.now() + Math.random(), date: new Date().toISOString().slice(0, 10), coachId: newId, coachName: clean.name, qty: clean.credits, amount: clean.credits * clean.rate, rate: clean.rate }, ...prev]);
+                if (clean.credits > 0) setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: new Date().toISOString().slice(0, 10), coachId: newId, coachName: clean.name, qty: clean.credits, amount: clean.credits * clean.rate, rate: clean.rate }, ...prev]);
                 showToast(`已新增教練 ${clean.name}（@${uname}）`);
               }
               setEditCoach(null);
