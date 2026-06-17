@@ -469,7 +469,7 @@ export default function App() {
       <div style={S.appBg}>
         <Header title="管理員" onLogout={logout} syncState={syncState} />
         <div style={S.tabRow}>
-          {[["overview", "📊 總覽"], ["coaches", "👥 教練"], ["charter", "🏟️ 包場"], ["ledger", "💰 流水帳"], ["records", "📋 記錄"], ["settings", "⚙️ 設定"]].map(([k, label]) => (
+          {[["overview", "📊 總覽"], ["schedule", "📅 課表"], ["coaches", "👥 教練"], ["charter", "🏟️ 包場"], ["ledger", "💰 流水帳"], ["records", "📋 記錄"], ["settings", "⚙️ 設定"]].map(([k, label]) => (
             <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}>{label}</button>
           ))}
         </div>
@@ -510,6 +510,65 @@ export default function App() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {adminTab === "schedule" && (
+          <div style={S.calContainer}>
+            <h2 style={S.sectionTitle}>全部教練課表</h2>
+            <p style={S.gridHint}>一覽所有教練嘅預約。撳已預約嘅格可協助取消。</p>
+            <div style={S.weekNav}>
+              <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
+              <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
+              <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
+            </div>
+            <div style={S.calScroll}>
+              <table style={S.table}>
+                <thead><tr><th style={S.thTime}></th>
+                  {days.map((d) => { const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={S.dayLabel}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today && <div style={S.todayTag}>今日</div>}</th>; })}
+                </tr></thead>
+                <tbody>
+                  {TIME_SLOTS.map((time) => {
+                    const isHourStart = time.endsWith(":00");
+                    return (
+                      <tr key={time}>
+                        <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
+                        {days.map((d) => {
+                          const date = formatDate(d);
+                          const here = cellArr(date, time);
+                          const charter = here.find((v) => v.type === "charter");
+                          const isPast = hoursUntil(date, time) < 0;
+                          return (
+                            <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616" }}>
+                              {charter ? (
+                                <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff", alignItems: "flex-start", cursor: "pointer" }}
+                                  onClick={() => charter.start === time && setAdminCancelModal({ date, start: charter.start, coachId: 0, type: "charter" })}>
+                                  {charter.start === time && <span style={S.slotNameFull}>{charter.charterType === "group" ? "小組" : "包場"}{charter.coachName ? ` · ${charter.coachName}` : ""}</span>}
+                                </div>
+                              ) : here.length > 0 ? (
+                                <div style={S.slotMulti}>
+                                  {here.map((v, idx) => {
+                                    const c = getCoach(v.coachId);
+                                    const showLabel = v.start === time;
+                                    return (
+                                      <div key={idx} style={{ ...S.slotChip, background: c?.color + "33", borderLeft: `3px solid ${c?.color}`, alignItems: "flex-start", cursor: "pointer" }}
+                                        onClick={() => showLabel && setAdminCancelModal({ date, start: v.start, coachId: v.coachId, type: v.type })}>
+                                        {showLabel && <span style={S.slotNameFull}>{c?.name}{v.type === "duo" ? " ²" : ""}</span>}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : isPast ? <div style={S.slotPast} /> : <div style={S.slotEmptyRO} />}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p style={S.assistHint}>² = 1對2　｜　白色 = 包場／小組</p>
           </div>
         )}
 
@@ -1090,6 +1149,7 @@ const S = {
   slotNameFull: { fontSize: 9, fontWeight: 700, color: "#fff", lineHeight: 1.1, wordBreak: "break-word", overflow: "hidden" },
   cancelSlotBtn: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 10, padding: 0 },
   slotEmpty: { width: "100%", minHeight: 20, background: "#1a1a1a", border: "none", borderRadius: 3, color: "#3a3a3a", fontSize: 13, cursor: "pointer" },
+  slotEmptyRO: { minHeight: 20, background: "#1a1a1a", borderRadius: 3 },
   slotAdd: { width: 18, minHeight: 30, background: "#202020", border: "1px dashed #3a3a3a", borderRadius: 3, color: "#6BCB77", fontSize: 12, cursor: "pointer", flexShrink: 0 },
   slotPast: { minHeight: 20, background: "#111", borderRadius: 3 },
   slotDisabled: { minHeight: 20, background: "#141414", borderRadius: 3 },
