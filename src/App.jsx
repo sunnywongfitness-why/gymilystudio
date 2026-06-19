@@ -33,7 +33,13 @@ const DUO_HALF_HOUR_ADD = 50;
 function duoPrice(hours) { return DUO_BASE + Math.round((hours - 1) / 0.5) * DUO_HALF_HOUR_ADD; }
 
 const CHARTER_PRICE = 300; // 包場 $300 一節（時長由管理員自選），佔全場
+
+// 其他租場類型：包場/小組佔全場（2位），試堂只佔1位（可同教練並存）
+const isWholeVenue = (e) => e.type === "charter" && e.charterType !== "trial";
+const rentalShort = (ct) => ct === "group" ? "小組" : ct === "trial" ? "試堂" : "包場";
+const rentalFull = (ct) => ct === "group" ? "小組訓練" : ct === "trial" ? "試堂" : "私人包場";
 const ASSIST_CANCEL_LIMIT = 1; // 每位教練每月「24小時內由管理員代取消」額度
+const LOW_CREDIT_THRESHOLD = 2; // 剩餘堂數 ≤ 此數視為「快用完」
 
 // 休息日設定（空 = 全週開放）。如需設休息日，例如週五：改成 [5]。getDay(): 日0 一1 二2 三3 四4 五5 六6
 const CLOSED_DAYS = [];
@@ -67,6 +73,17 @@ function slotsFor(time, hours) {
   const n = Math.round(hours * 4);
   return Array.from({ length: n }, (_, i) => addMinutes(time, i * 15));
 }
+// 將 "HH:MM" 轉做由 07:00 起計嘅第幾個 15 分鐘格（方便計算跨度中點）
+function slotIndex(time) {
+  const [h, m] = time.split(":").map(Number);
+  return (h - 7) * 4 + m / 15;
+}
+// 呢一行係咪呢個 booking 嘅「顯示文字」行（取跨度中間嗰行，等色塊睇落似一個整塊，字又唔會逼喺最頂）
+function isLabelRow(entryStart, entryHours, rowTime) {
+  const span = Math.round(entryHours * 4);
+  const labelOffset = Math.floor((span - 1) / 2);
+  return slotIndex(rowTime) - slotIndex(entryStart) === labelOffset;
+}
 
 export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
@@ -83,6 +100,7 @@ export default function App() {
   const [charterModal, setCharterModal] = useState(null); // admin charter { date, time, hours }
   const [charterLog, setCharterLog] = useState(() => persisted("charterLog", [])); // {date, bookDate, start, hours, amount}
   const [assistCancelLog, setAssistCancelLog] = useState(() => persisted("assistCancelLog", [])); // {coachId, month, date, start}
+  const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
   const [syncState, setSyncState] = useState(cloudEnabled ? "connecting" : "local"); // connecting | synced | local | error
 
   // 同步用：記住最後一次「已儲存／已收到」嘅內容，避免回音造成無限迴圈
@@ -98,6 +116,7 @@ export default function App() {
     if (d.purchaseLog !== undefined) setPurchaseLog(d.purchaseLog);
     if (d.charterLog !== undefined) setCharterLog(d.charterLog);
     if (d.assistCancelLog !== undefined) setAssistCancelLog(d.assistCancelLog);
+    if (d.cancelLog !== undefined) setCancelLog(d.cancelLog);
   };
 
   // 首次載入：雲端模式由雲端讀取（若雲端空白則上載目前本機資料），並訂閱即時變更
@@ -111,7 +130,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog };
+        const seed = { coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -130,7 +149,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog };
+    const bundle = { coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -146,7 +165,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog]);
+  }, [coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [adminCancelModal, setAdminCancelModal] = useState(null); // {date,start,coachId,type}
@@ -157,7 +176,15 @@ export default function App() {
   const [editCoach, setEditCoach] = useState(null);
   const [addCreditModal, setAddCreditModal] = useState(null);
   const [adminTab, setAdminTab] = useState("overview");
+  const [recordsView, setRecordsView] = useState("bookings"); // bookings | cancelled
+  const [recCoach, setRecCoach] = useState("all");
+  const [recType, setRecType] = useState("all"); // all|solo|duo|private|group|trial
+  const [recRange, setRecRange] = useState("upcoming"); // upcoming|past|month|all
+  const [recExpanded, setRecExpanded] = useState(null);
+  const [coachSort, setCoachSort] = useState("remain"); // remain|paid|name
   const [resetModal, setResetModal] = useState(false);
+  const [delCoachModal, setDelCoachModal] = useState(null); // coach pending deletion
+  const [showPasswords, setShowPasswords] = useState(false);
 
   const days = getDaysOfWeek(weekOffset * 7);
   const showToast = (msg, type = "success") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
@@ -181,20 +208,19 @@ export default function App() {
   const remaining = isCoach && liveUser ? liveUser.credits - liveUser.used : 0;
   const soldOut = isCoach && remaining <= 0;
 
-  // bookings[key] is an ARRAY of entries; each entry occupies "seats" (charter=2, others=1)
+  // bookings[key] is an ARRAY of entries; each entry occupies "seats" (包場/小組=2, 其他=1)
   const cellArr = (date, slot) => bookings[`${date}_${slot}`] || [];
-  const seats = (entry) => (entry.type === "charter" ? MAX_CONCURRENT : 1);
+  const seats = (entry) => (isWholeVenue(entry) ? MAX_CONCURRENT : 1);
   const occupancy = (date, slot) => cellArr(date, slot).reduce((n, e) => n + seats(e), 0);
 
-  // can we place a booking of `hours` at date/time?
-  const canPlace = (date, time, hours, isCharter = false) => {
+  // can we place a booking of `hours` at date/time? need = 需要幾多個位
+  const canPlace = (date, time, hours, need = 1) => {
     const slots = slotsFor(time, hours);
-    const need = isCharter ? MAX_CONCURRENT : 1;
     for (const s of slots) {
       const [hh] = s.split(":").map(Number);
       if (hh >= 22) return "超出營業時間";
       if (occupancy(date, s) + need > MAX_CONCURRENT)
-        return isCharter ? "呢個時段唔夠空（包場需全場）" : "呢個時段已滿（最多2名教練）";
+        return need >= MAX_CONCURRENT ? "呢個時段唔夠空（包場／小組需全場）" : "呢個時段已滿（最多2名）";
     }
     return null;
   };
@@ -213,7 +239,7 @@ export default function App() {
     if (err) { showToast(err, "error"); return; }
     const price = sessionType === "duo" ? duoPrice(hours) : liveUser.rate * hours;
     const slots = slotsFor(time, hours);
-    const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price };
+    const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
       slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -224,22 +250,23 @@ export default function App() {
     setBookModal(null);
   };
 
-  // ADMIN: place a charter/group booking (occupies whole venue), price editable
+  // ADMIN: place a rental (包場/小組=全場2位, 試堂=1位), price editable
   const confirmCharter = () => {
     const { date, time, hours, charterType, price, coachName } = charterModal;
     if (isClosedDay(date)) { showToast("休息日", "error"); return; }
-    const err = canPlace(date, time, hours, true);
+    const need = charterType === "trial" ? 1 : MAX_CONCURRENT;
+    const err = canPlace(date, time, hours, need);
     if (err) { showToast(err, "error"); return; }
-    const amt = parseInt(price) || 0;
+    const amt = charterType === "trial" ? 0 : (parseInt(price) || 0);
     const slots = slotsFor(time, hours);
-    const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "" };
+    const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
       slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
       return u;
     });
     setCharterLog((prev) => [{ date: new Date().toISOString().slice(0, 16).replace("T", " "), bookDate: date, start: time, hours, charterType, amount: amt, coachName: coachName || "" }, ...prev]);
-    showToast(`已落${charterType === "group" ? "小組訓練" : "私人包場"}（$${amt}）`);
+    showToast(`已落${rentalFull(charterType)}（$${amt}）`);
     setCharterModal(null);
   };
 
@@ -263,6 +290,15 @@ export default function App() {
       });
       return u;
     });
+    // 留底：取消記錄（先記低先删，等日後可以查到呢個時段點解空咗）
+    setCancelLog((prev) => [{
+      date, start, hours: meta.hours, type: meta.type, charterType: meta.charterType || null,
+      coachId: meta.type === "charter" ? null : coachId,
+      coachName: meta.type === "charter" ? (meta.coachName || "") : (getCoach(coachId)?.name || ""),
+      price: meta.price || 0,
+      cancelledBy: byAdmin ? "admin" : "coach",
+      cancelledAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+    }, ...prev]);
     if (meta.type !== "charter") {
       setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - meta.hours) } : c));
       // 由管理員協助、而且係 24 小時內嘅取消，計入該教練本月額度
@@ -338,7 +374,7 @@ export default function App() {
         const date = k.split("_")[0];
         arr.forEach((v) => { if (k === `${date}_${v.start}`) bkRows.push({
           日期: date, 開始: v.start, 時長小時: v.hours,
-          類型: v.type === "charter" ? (v.charterType === "group" ? "小組訓練" : "私人包場") : v.type === "duo" ? "一對二" : "一對一",
+          類型: v.type === "charter" ? rentalFull(v.charterType) : v.type === "duo" ? "一對二" : "一對一",
           教練: v.type === "charter" ? (v.coachName || "") : (getCoach(v.coachId)?.name || ""),
           收費: v.price || 0,
         }); });
@@ -347,8 +383,14 @@ export default function App() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bkRows.length ? bkRows : [{ 日期: "", 開始: "", 時長小時: "", 類型: "", 教練: "", 收費: "" }]), "上堂記錄");
 
       // 5) 包場/小組
-      const chRows = charterLog.map((r) => ({ 落單時間: r.date, 預約日期: r.bookDate, 開始: r.start, 時長小時: r.hours, 類型: r.charterType === "group" ? "小組訓練" : "私人包場", 負責教練: r.coachName || "", 收費: r.amount }));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(chRows.length ? chRows : [{ 落單時間: "", 預約日期: "", 開始: "", 時長小時: "", 類型: "", 負責教練: "", 收費: "" }]), "包場小組");
+      const activeCh = charterLog.map((r) => ({ 落單時間: r.date, 預約日期: r.bookDate, 開始: r.start, 時長小時: r.hours, 類型: rentalFull(r.charterType), 負責教練: r.coachName || "", 收費: r.amount, 已取消: "否", 取消時間: "" }));
+      const cancelledCh = cancelLog.filter((r) => r.type === "charter").map((r) => ({ 落單時間: "", 預約日期: r.date, 開始: r.start, 時長小時: r.hours, 類型: rentalFull(r.charterType), 負責教練: r.coachName || "", 收費: r.price || 0, 已取消: "是", 取消時間: r.cancelledAt || "" }));
+      const chRows = [...activeCh, ...cancelledCh];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(chRows.length ? chRows : [{ 落單時間: "", 預約日期: "", 開始: "", 時長小時: "", 類型: "", 負責教練: "", 收費: "", 已取消: "", 取消時間: "" }]), "包場小組");
+
+      // 取消記錄
+      const cxRows = cancelLog.map((r) => ({ 原定日期: r.date, 開始: r.start, 時長小時: r.hours, 類型: r.type === "charter" ? rentalFull(r.charterType) : r.type === "duo" ? "一對二" : "一對一", 教練: r.coachName || "", 收費: r.price || 0, 取消方式: r.cancelledBy === "admin" ? "管理員代取消" : "教練自行取消", 取消時間: r.cancelledAt || "" }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cxRows.length ? cxRows : [{ 原定日期: "", 開始: "", 時長小時: "", 類型: "", 教練: "", 收費: "", 取消方式: "", 取消時間: "" }]), "取消記錄");
 
       const today = new Date().toISOString().slice(0, 10);
       const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
@@ -443,7 +485,7 @@ export default function App() {
       const date = k.split("_")[0];
       arr.forEach((v) => {
         if (k === `${date}_${v.start}`)
-          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId });
+          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null });
       });
     });
     allBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
@@ -461,6 +503,12 @@ export default function App() {
     const totalClassRev = Object.values(classByMonth).reduce((a, b) => a + b, 0);
     const totalRevenue = totalPurchase + totalCharter; // 實收現金：買堂 + 包場/小組
 
+    // 本月總收入：本月買堂 + 本月包場/小組（試堂 $0 自動唔計）
+    const thisMonth = monthKey(formatDate(new Date()));
+    const monthPurchase = purchaseLog.filter((r) => monthKey(r.date) === thisMonth).reduce((a, r) => a + r.amount, 0);
+    const monthCharter = charterLog.filter((r) => monthKey(r.bookDate) === thisMonth).reduce((a, r) => a + r.amount, 0);
+    const monthRevenue = monthPurchase + monthCharter;
+
     // 各教練總付款（買堂 + 初始）
     const coachPaid = {};
     coaches.forEach((c) => { coachPaid[c.id] = purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.amount, 0) + initialCreditsOf(c) * c.rate; });
@@ -469,7 +517,7 @@ export default function App() {
       <div style={S.appBg}>
         <Header title="管理員" onLogout={logout} syncState={syncState} />
         <div style={S.tabRow}>
-          {[["overview", "📊 總覽"], ["schedule", "📅 課表"], ["coaches", "👥 教練"], ["charter", "🏟️ 包場"], ["ledger", "💰 流水帳"], ["records", "📋 記錄"], ["settings", "⚙️ 設定"]].map(([k, label]) => (
+          {[["overview", "📊 總覽"], ["schedule", "📅 課表"], ["coaches", "👥 教練"], ["ledger", "💰 流水帳"], ["records", "📋 記錄"], ["settings", "⚙️ 設定"]].map(([k, label]) => (
             <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}>{label}</button>
           ))}
         </div>
@@ -477,10 +525,11 @@ export default function App() {
         {adminTab === "overview" && (
           <div style={S.container}>
             <div style={S.kpiRow}>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>總收入</div><div style={S.kpiBig}>${totalRevenue.toLocaleString()}</div></div>
+              <div style={S.kpiCard}><div style={S.kpiLabel}>本月總收入</div><div style={S.kpiBig}>${monthRevenue.toLocaleString()}</div></div>
               <div style={S.kpiCard}><div style={S.kpiLabel}>已上堂數</div><div style={S.kpiBig}>{totalUsed}</div></div>
               <div style={S.kpiCard}><div style={S.kpiLabel}>已售堂數</div><div style={S.kpiBig}>{totalSold}</div></div>
             </div>
+            <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}</p>
 
             <h2 style={S.sectionTitle}>每月收入</h2>
             <div style={S.bookingList}>
@@ -494,29 +543,57 @@ export default function App() {
             </div>
             <p style={S.assistHint}>「一筆過租金」= 教練買堂時實收現金；「實際堂數收入」= 當月實際 book 咗嘅堂（一對一／一對二／包場）價值。</p>
 
-            <h2 style={{ ...S.sectionTitle, marginTop: 24 }}>各教練統計</h2>
-            <div style={S.bookingList}>
-              {coaches.map((c) => (
-                <div key={c.id} style={S.coachStatRow}>
-                  <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={S.bookingCoach}>{c.name}</div>
-                    <div style={S.bookingTime}>每堂 ${c.rate}　已用 {c.used}/{c.credits} 堂</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={S.revenueNum}>${(coachPaid[c.id] || 0).toLocaleString()}</div>
-                    <div style={S.bookingTime}>總付款　剩 {c.credits - c.used} 堂</div>
-                  </div>
-                </div>
-              ))}
+            <div style={{ ...S.flexBetween, marginTop: 24 }}>
+              <h2 style={{ ...S.sectionTitle, marginBottom: 0 }}>各教練統計</h2>
+              <select style={S.select} value={coachSort} onChange={(e) => setCoachSort(e.target.value)}>
+                <option value="remain">剩餘堂數（少→多）</option>
+                <option value="paid">總付款（多→少）</option>
+                <option value="name">名稱</option>
+              </select>
             </div>
+            {(() => {
+              const lowList = coaches.filter((c) => (c.credits - c.used) <= LOW_CREDIT_THRESHOLD);
+              const sorted = [...coaches].sort((a, b) => {
+                if (coachSort === "paid") return (coachPaid[b.id] || 0) - (coachPaid[a.id] || 0);
+                if (coachSort === "name") return a.name.localeCompare(b.name);
+                return (a.credits - a.used) - (b.credits - b.used); // remain asc
+              });
+              return (
+              <>
+                {lowList.length > 0 && (
+                  <div style={S.lowWarnBox}>
+                    ⚠️ 堂數快用完（剩 ≤ {LOW_CREDIT_THRESHOLD}）：{lowList.map((c) => `${c.name}（剩${c.credits - c.used}）`).join("、")}　— 可提早提醒增購
+                  </div>
+                )}
+                <div style={{ ...S.bookingList, marginTop: 12 }}>
+                  {sorted.map((c) => {
+                    const remain = c.credits - c.used;
+                    const low = remain <= LOW_CREDIT_THRESHOLD;
+                    return (
+                      <div key={c.id} style={S.coachStatRow}>
+                        <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
+                        <div style={{ flex: 1 }}>
+                          <div style={S.bookingCoach}>{c.name}{low && <span style={S.lowPill}>低</span>}</div>
+                          <div style={S.bookingTime}>每堂 ${c.rate}　已用 {c.used}/{c.credits} 堂</div>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={S.revenueNum}>${(coachPaid[c.id] || 0).toLocaleString()}</div>
+                          <div style={S.bookingTime}>總付款　剩 <span style={{ color: low ? "#FF8FA3" : "#aaa", fontWeight: low ? 700 : 400 }}>{remain}</span> 堂</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+              );
+            })()}
           </div>
         )}
 
         {adminTab === "schedule" && (
           <div style={S.calContainer}>
             <h2 style={S.sectionTitle}>全部教練課表</h2>
-            <p style={S.gridHint}>一覽所有教練嘅預約。撳已預約嘅格可協助取消。</p>
+            <p style={S.gridHint}>一覽所有教練同其他租場嘅預約。撳已預約嘅格協助取消；撳空格可落其他租場（包場／小組／試堂）。</p>
             <div style={S.weekNav}>
               <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
               <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
@@ -525,89 +602,7 @@ export default function App() {
             <div style={S.calScroll}>
               <table style={S.table}>
                 <thead><tr><th style={S.thTime}></th>
-                  {days.map((d) => { const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={S.dayLabel}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today && <div style={S.todayTag}>今日</div>}</th>; })}
-                </tr></thead>
-                <tbody>
-                  {TIME_SLOTS.map((time) => {
-                    const isHourStart = time.endsWith(":00");
-                    return (
-                      <tr key={time}>
-                        <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
-                        {days.map((d) => {
-                          const date = formatDate(d);
-                          const here = cellArr(date, time);
-                          const charter = here.find((v) => v.type === "charter");
-                          const isPast = hoursUntil(date, time) < 0;
-                          return (
-                            <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616" }}>
-                              {charter ? (
-                                <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff", alignItems: "flex-start", cursor: "pointer" }}
-                                  onClick={() => charter.start === time && setAdminCancelModal({ date, start: charter.start, coachId: 0, type: "charter" })}>
-                                  {charter.start === time && <span style={S.slotNameFull}>{charter.charterType === "group" ? "小組" : "包場"}{charter.coachName ? ` · ${charter.coachName}` : ""}</span>}
-                                </div>
-                              ) : here.length > 0 ? (
-                                <div style={S.slotMulti}>
-                                  {here.map((v, idx) => {
-                                    const c = getCoach(v.coachId);
-                                    const showLabel = v.start === time;
-                                    return (
-                                      <div key={idx} style={{ ...S.slotChip, background: c?.color + "33", borderLeft: `3px solid ${c?.color}`, alignItems: "flex-start", cursor: "pointer" }}
-                                        onClick={() => showLabel && setAdminCancelModal({ date, start: v.start, coachId: v.coachId, type: v.type })}>
-                                        {showLabel && <span style={S.slotNameFull}>{c?.name}{v.type === "duo" ? " ²" : ""}</span>}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              ) : isPast ? <div style={S.slotPast} /> : <div style={S.slotEmptyRO} />}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <p style={S.assistHint}>² = 1對2　｜　白色 = 包場／小組</p>
-          </div>
-        )}
-
-        {adminTab === "coaches" && (
-          <div style={S.container}>
-            <div style={S.flexBetween}>
-              <h2 style={S.sectionTitle}>教練帳戶</h2>
-              <button style={S.addBtn} onClick={() => setEditCoach({ id: null, username: "", name: "", credits: 0, rate: 200, password: "1234" })}>+ 新增教練</button>
-            </div>
-            <div style={S.bookingList}>
-              {coaches.map((c) => (
-                <div key={c.id} style={S.coachStatRow}>
-                  <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={S.bookingCoach}>{c.name} <span style={S.idTag}>@{c.username}</span></div>
-                    <div style={S.bookingTime}>堂數 {c.used}/{c.credits}　每堂 ${c.rate}　密碼 {c.password}</div>
-                  </div>
-                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1 })}>+ 堂</button>
-                  <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
-                  <button style={S.delBtn} onClick={() => { setCoaches((prev) => prev.filter((x) => x.id !== c.id)); showToast("已刪除教練"); }}>刪</button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {adminTab === "charter" && (
-          <div style={S.calContainer}>
-            <h2 style={S.sectionTitle}>包場 Booking（管理員專用）</h2>
-            <p style={S.gridHint}>${CHARTER_PRICE} 一節，時長自選；包場期間全場獨佔（其他教練不能同時 book）。按空格落單。</p>
-            <div style={S.weekNav}>
-              <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
-              <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
-              <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
-            </div>
-            <div style={S.calScroll}>
-              <table style={S.table}>
-                <thead><tr><th style={S.thTime}></th>
-                  {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); return <th key={d} style={S.th}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : undefined }}>{d.getDate()}</div>{closed && <div style={S.closedTag}>休息</div>}</th>; })}
+                  {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}</th>; })}
                 </tr></thead>
                 <tbody>
                   {TIME_SLOTS.map((time) => {
@@ -619,20 +614,44 @@ export default function App() {
                           const date = formatDate(d);
                           const here = cellArr(date, time);
                           const occ = occupancy(date, time);
-                          const charter = here.find((v) => v.type === "charter");
+                          const whole = here.find(isWholeVenue);
                           const isPast = hoursUntil(date, time) < 0;
                           const closed = isClosedDay(date);
+                          const canAdd = occ < MAX_CONCURRENT && !isPast && !closed;
                           return (
                             <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616", background: closed && here.length === 0 ? "#0c0c0c" : undefined }}>
-                              {charter ? (
+                              {whole ? (
                                 <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff", alignItems: "flex-start" }}>
-                                  {charter.start === time && (
-                                    <span style={S.slotNameFull}>{charter.charterType === "group" ? "小組" : "包場"}{charter.coachName ? ` · ${charter.coachName}` : ""}</span>
+                                  {isLabelRow(whole.start, whole.hours, time) && (
+                                    <span style={S.slotLabelBlock}>
+                                      <span style={S.slotNameFull}>{rentalShort(whole.charterType)}{whole.coachName ? ` · ${whole.coachName}` : ""}</span>
+                                      <span style={S.slotTimeFull}>{whole.start}–{addMinutes(whole.start, whole.hours * 60)}</span>
+                                    </span>
                                   )}
-                                  {charter.start === time && <button style={S.cancelSlotBtn} onClick={() => doCancel(date, charter.start, 0, "charter", true)}>✕</button>}
+                                  {isLabelRow(whole.start, whole.hours, time) &&
+                                    <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: whole.start, coachId: 0, type: "charter" })}>✕</button>}
                                 </div>
-                              ) : occ > 0 ? <div style={S.slotDisabled} />
-                                : closed ? <div style={S.slotClosed} />
+                              ) : here.length > 0 ? (
+                                <div style={S.slotMulti}>
+                                  {here.map((v, idx) => {
+                                    const showLabel = isLabelRow(v.start, v.hours, time);
+                                    const isTrial = v.type === "charter";
+                                    const c = isTrial ? null : getCoach(v.coachId);
+                                    return (
+                                      <div key={idx} style={{ ...S.slotChip, background: isTrial ? "#ffffff22" : c?.color + "33", borderLeft: `3px solid ${isTrial ? "#fff" : c?.color}`, alignItems: "flex-start" }}>
+                                        {showLabel && (
+                                          <span style={S.slotLabelBlock}>
+                                            <span style={S.slotNameFull}>{isTrial ? `試堂${v.coachName ? " · " + v.coachName : ""}` : `${c?.name}${v.type === "duo" ? " ²" : ""}`}</span>
+                                            <span style={S.slotTimeFull}>{v.start}–{addMinutes(v.start, v.hours * 60)}</span>
+                                          </span>
+                                        )}
+                                        {showLabel && <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: v.start, coachId: v.coachId, type: v.type })}>✕</button>}
+                                      </div>
+                                    );
+                                  })}
+                                  {canAdd && <button style={S.slotAdd} onClick={() => setCharterModal({ date, time, charterType: "trial", hours: 1, price: 0, coachName: "" })}>+</button>}
+                                </div>
+                              ) : closed ? <div style={S.slotClosed} />
                                 : isPast ? <div style={S.slotPast} />
                                 : <button style={S.slotEmpty} onClick={() => setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "" })}>+</button>}
                             </td>
@@ -643,6 +662,33 @@ export default function App() {
                   })}
                 </tbody>
               </table>
+            </div>
+            <p style={S.assistHint}>² = 1對2　｜　白色 = 其他租場（包場／小組／試堂）</p>
+          </div>
+        )}
+
+        {adminTab === "coaches" && (
+          <div style={S.container}>
+            <div style={S.flexBetween}>
+              <h2 style={S.sectionTitle}>教練帳戶</h2>
+              <button style={S.addBtn} onClick={() => setEditCoach({ id: null, username: "", name: "", credits: 0, rate: 200, password: "1234" })}>+ 新增教練</button>
+            </div>
+            <div style={{ ...S.filterRow, justifyContent: "flex-end" }}>
+              <button style={S.linkBtn} onClick={() => setShowPasswords((v) => !v)}>{showPasswords ? "🙈 隱藏密碼" : "👁️ 顯示密碼"}</button>
+            </div>
+            <div style={S.bookingList}>
+              {coaches.map((c) => (
+                <div key={c.id} style={S.coachStatRow}>
+                  <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={S.bookingCoach}>{c.name} <span style={S.idTag}>@{c.username}</span></div>
+                    <div style={S.bookingTime}>堂數 {c.used}/{c.credits}　每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
+                  </div>
+                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1 })}>+ 堂</button>
+                  <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
+                  <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -687,27 +733,107 @@ export default function App() {
 
         {adminTab === "records" && (
           <div style={S.container}>
-            <h2 style={S.sectionTitle}>所有上堂記錄</h2>
-            {allBookings.length === 0 ? <p style={S.emptyText}>暫無記錄</p> : (
-              <div style={S.bookingList}>
-                {allBookings.map(({ date, start, hours, type, charterType, price, coachName, coach, coachId }, i) => (
-                  <div key={i} style={S.bookingItem}>
-                    <div style={{ ...S.dot, background: type === "charter" ? "#fff" : coach?.color }} />
-                    <div style={{ flex: 1 }}>
-                      <div style={S.bookingCoach}>
-                        {type === "charter" ? (charterType === "group" ? "小組訓練" : "私人包場") : coach?.name}{" "}
-                        <span style={type === "duo" ? S.duoTag : type === "charter" ? S.charterTag : S.soloTag}>
-                          {type === "duo" ? "1對2" : type === "charter" ? `$${price}` : "1對1"}
-                        </span>
+            <h2 style={S.sectionTitle}>記錄</h2>
+            <div style={S.segRow}>
+              <button style={recordsView === "bookings" ? S.segActive : S.seg} onClick={() => setRecordsView("bookings")}>上堂記錄</button>
+              <button style={recordsView === "cancelled" ? S.segActive : S.seg} onClick={() => setRecordsView("cancelled")}>取消記錄 {cancelLog.length > 0 && <span style={S.badge}>{cancelLog.length}</span>}</button>
+            </div>
+
+            {recordsView === "bookings" ? (() => {
+              const now = new Date();
+              const tm = monthKey(formatDate(now));
+              const typeOf = (b) => b.type === "charter" ? (b.charterType || "private") : b.type;
+              let list = allBookings.filter((b) => {
+                if (recCoach !== "all") { if (b.type === "charter") return false; if (String(b.coachId) !== String(recCoach)) return false; }
+                if (recType !== "all" && typeOf(b) !== recType) return false;
+                const isPast = new Date(`${b.date}T${b.start}:00`) < now;
+                if (recRange === "upcoming" && isPast) return false;
+                if (recRange === "past" && !isPast) return false;
+                if (recRange === "month" && monthKey(b.date) !== tm) return false;
+                return true;
+              });
+              list.sort((a, b) => recRange === "upcoming"
+                ? `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`)
+                : `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
+              const sumRevenue = list.reduce((s, b) => s + (b.price || 0), 0);
+              return (
+              <>
+                <div style={{ ...S.filterWrap, marginTop: 14 }}>
+                  <select style={S.select} value={recCoach} onChange={(e) => setRecCoach(e.target.value)}>
+                    <option value="all">全部教練</option>
+                    {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <select style={S.select} value={recType} onChange={(e) => setRecType(e.target.value)}>
+                    <option value="all">全部類型</option>
+                    <option value="solo">一對一</option>
+                    <option value="duo">一對二</option>
+                    <option value="private">私人包場</option>
+                    <option value="group">小組訓練</option>
+                    <option value="trial">試堂</option>
+                  </select>
+                  <select style={S.select} value={recRange} onChange={(e) => setRecRange(e.target.value)}>
+                    <option value="upcoming">即將</option>
+                    <option value="past">已完成</option>
+                    <option value="month">本月</option>
+                    <option value="all">全部</option>
+                  </select>
+                </div>
+                <div style={S.recSummary}>共 {list.length} 項　｜　收入 ${sumRevenue.toLocaleString()}</div>
+                <div style={S.bookingList}>
+                  {list.length === 0 ? <p style={S.emptyText}>冇符合條件嘅記錄</p> : list.map((b, i) => {
+                    const { date, start, hours, type, charterType, price, coachName, coach, coachId } = b;
+                    const key = `${date}_${start}_${coachId}_${type}`;
+                    const open = recExpanded === key;
+                    const isPast = new Date(`${date}T${start}:00`) < now;
+                    return (
+                    <div key={i} style={S.bookingItem}>
+                      <div style={{ ...S.dot, background: type === "charter" ? "#fff" : coach?.color }} />
+                      <div style={{ flex: 1, cursor: "pointer" }} onClick={() => setRecExpanded(open ? null : key)}>
+                        <div style={S.bookingCoach}>
+                          {type === "charter" ? rentalFull(charterType) : coach?.name}{" "}
+                          <span style={type === "duo" ? S.duoTag : type === "charter" ? S.charterTag : S.soloTag}>
+                            {type === "duo" ? "1對2" : type === "charter" ? (charterType === "trial" ? "試堂" : `$${price}`) : "1對1"}
+                          </span>
+                          {isPast && <span style={S.donePill}>已完成</span>}
+                        </div>
+                        <div style={S.bookingTime}>{date}（{formatDay(new Date(`${date}T00:00:00`))}） · {start}–{addMinutes(start, hours * 60)}（{hours}小時）{type === "charter" && coachName ? `　負責：${coachName}` : ""}</div>
+                        {open && (
+                          <div style={S.recDetail}>
+                            <div>類型：{type === "charter" ? rentalFull(charterType) : type === "duo" ? "一對二" : "一對一"}</div>
+                            <div>收費：{type === "charter" && charterType === "trial" ? "免費" : `$${price}`}</div>
+                            {type !== "charter" && <div>扣堂數：{hours} 堂</div>}
+                            <div>落單時間：{b.createdAt || "—（舊記錄）"}</div>
+                          </div>
+                        )}
                       </div>
-                      <div style={S.bookingTime}>{date} · {start}–{addMinutes(start, hours * 60)}（{hours}小時）{type === "charter" && coachName ? `　負責：${coachName}` : ""}</div>
+                      {!isPast && <button style={S.delBtn} onClick={() => setAdminCancelModal({ date, start, coachId, type })}>取消</button>}
                     </div>
-                    <button style={S.delBtn} onClick={() => setAdminCancelModal({ date, start, coachId, type })}>取消</button>
-                  </div>
-                ))}
-              </div>
+                    );
+                  })}
+                </div>
+                <p style={S.assistHint}>※ 撳記錄可展開詳情；管理員可協助取消未開始嘅時段（包括24小時內）。</p>
+              </>
+              );
+            })() : (
+              <>
+                <div style={{ ...S.bookingList, marginTop: 16 }}>
+                  {cancelLog.length === 0 ? <p style={S.emptyText}>暫無取消記錄</p> : cancelLog.map((r, i) => (
+                    <div key={i} style={S.bookingItem}>
+                      <div style={{ ...S.dot, background: "#FF6B6B" }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={S.bookingCoach}>
+                          {r.type === "charter" ? rentalFull(r.charterType) : r.coachName}{" "}
+                          <span style={S.cancelledTag}>{r.cancelledBy === "admin" ? "管理員代取消" : "教練自行取消"}</span>
+                        </div>
+                        <div style={S.bookingTime}>原定 {r.date} · {r.start}–{addMinutes(r.start, r.hours * 60)}（{r.hours}小時）{r.price ? `　$${r.price}` : ""}</div>
+                        <div style={S.bookingTime}>取消於 {r.cancelledAt}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p style={S.assistHint}>※ 留底紀錄，方便日後查核某時段點解空出，唔可以還原。</p>
+              </>
             )}
-            <p style={S.assistHint}>※ 管理員可協助取消任何時段（包括24小時內）</p>
           </div>
         )}
 
@@ -790,14 +916,18 @@ export default function App() {
 
         {charterModal && (
           <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
-            <h3 style={{ ...S.modalTitle, textAlign: "center" }}>包場 / 小組 Booking</h3>
+            <h3 style={{ ...S.modalTitle, textAlign: "center" }}>其他租場</h3>
             <p style={{ ...S.modalText, textAlign: "center" }}>{charterModal.date}　{charterModal.time}</p>
 
             <label style={S.label}>類型</label>
             <div style={S.segRow}>
-              <button style={charterModal.charterType === "private" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "private" })}>私人包場</button>
-              <button style={charterModal.charterType === "group" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "group" })}>小組訓練</button>
+              <button style={charterModal.charterType === "private" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "private", price: charterModal.charterType === "trial" ? CHARTER_PRICE : charterModal.price })}>私人包場</button>
+              <button style={charterModal.charterType === "group" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "group", price: charterModal.charterType === "trial" ? CHARTER_PRICE : charterModal.price })}>小組訓練</button>
+              <button style={charterModal.charterType === "trial" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "trial", price: 0 })}>試堂</button>
             </div>
+            {charterModal.charterType === "trial"
+              ? <p style={{ ...S.assistHint, marginTop: 6 }}>試堂只佔 1 個位，同一時段仲可以有教練 book，唔收費。</p>
+              : <p style={{ ...S.assistHint, marginTop: 6 }}>包場／小組會獨佔全場（2 位）。</p>}
 
             <label style={{ ...S.label, marginTop: 14 }}>時長</label>
             <div style={S.segRow}>
@@ -820,14 +950,20 @@ export default function App() {
               {coaches.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
 
-            <label style={{ ...S.label, marginTop: 14 }}>收費 ($，可自由修改)</label>
-            <input style={S.input} type="number" min="0" value={charterModal.price}
-              onChange={(e) => setCharterModal({ ...charterModal, price: e.target.value })} />
+            {charterModal.charterType === "trial" ? (
+              <p style={{ ...S.amountPreview, color: "#999", marginTop: 14 }}>試堂不收費，唔會計入收入。</p>
+            ) : (
+              <>
+                <label style={{ ...S.label, marginTop: 14 }}>收費 ($，可自由修改)</label>
+                <input style={S.input} type="number" min="0" value={charterModal.price}
+                  onChange={(e) => setCharterModal({ ...charterModal, price: e.target.value })} />
+              </>
+            )}
 
             <div style={S.priceBox}>
               <div style={S.priceRow}><span>時段</span><span>{charterModal.time} – {addMinutes(charterModal.time, charterModal.hours * 60)}</span></div>
-              <div style={S.priceRow}><span>場地</span><span>全場獨佔</span></div>
-              <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>收費</span><span>${parseInt(charterModal.price) || 0}</span></div>
+              <div style={S.priceRow}><span>場地</span><span>{charterModal.charterType === "trial" ? "佔 1 位（可同教練並存）" : "全場獨佔"}</span></div>
+              <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>收費</span><span>{charterModal.charterType === "trial" ? "免費" : `$${parseInt(charterModal.price) || 0}`}</span></div>
             </div>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setCharterModal(null)}>返回</button>
@@ -880,6 +1016,33 @@ export default function App() {
           </div></div>
         )}
 
+        {delCoachModal && (() => {
+          let bookingCount = 0;
+          Object.entries(bookings).forEach(([k, arr]) => {
+            const date = k.split("_")[0];
+            arr.forEach((e) => { if (e.coachId === delCoachModal.id && e.type !== "charter" && k === `${date}_${e.start}`) bookingCount++; });
+          });
+          const purCount = purchaseLog.filter((r) => r.coachId === delCoachModal.id).length;
+          return (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>刪除教練</h3>
+            <p style={S.modalText}>
+              確定刪除 <b style={{ color: "#fff" }}>{delCoachModal.name}</b>（@{delCoachModal.username}）？<br /><br />
+              此教練名下仍有 <b style={{ color: "#FFB347" }}>{bookingCount}</b> 個已預約時段、<b style={{ color: "#FFB347" }}>{purCount}</b> 筆購買記錄。<br />
+              刪除後帳號即時失效，歷史記錄仍會保留（顯示為空白教練）。此動作無法復原。
+            </p>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setDelCoachModal(null)}>返回</button>
+              <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
+                setCoaches((prev) => prev.filter((x) => x.id !== delCoachModal.id));
+                showToast("已刪除教練");
+                setDelCoachModal(null);
+              }}>確認刪除</button>
+            </div>
+          </div></div>
+          );
+        })()}
+
         {resetModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>重設所有資料</h3>
@@ -889,7 +1052,7 @@ export default function App() {
               <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
                 try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
                 setCoaches(DEFAULT_COACHES); setAdminPassword("admin123"); setBookings({});
-                setPurchaseLog([]); setCharterLog([]); setAssistCancelLog([]);
+                setPurchaseLog([]); setCharterLog([]); setAssistCancelLog([]); setCancelLog([]);
                 setResetModal(false); showToast("已重設資料");
               }}>確認重設</button>
             </div>
@@ -946,27 +1109,37 @@ export default function App() {
                         const date = formatDate(d);
                         const here = cellArr(date, time);
                         const occ = occupancy(date, time);
-                        const charter = here.find((v) => v.type === "charter");
+                        const whole = here.find(isWholeVenue);
                         const isPast = hoursUntil(date, time) < 0;
                         const closed = isClosedDay(date);
-                        const full = occ >= MAX_CONCURRENT;
-                        const iAmHere = here.some((v) => v.coachId === currentUser.id);
-                        const canAddHere = !charter && occ < MAX_CONCURRENT && !iAmHere && !isPast && !soldOut && !closed;
+                        const iAmHere = here.some((v) => v.coachId === currentUser.id && v.type !== "charter");
+                        const canAddHere = !whole && occ < MAX_CONCURRENT && !iAmHere && !isPast && !soldOut && !closed;
                         return (
                           <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616", background: closed && here.length === 0 ? "#0c0c0c" : undefined }}>
-                            {charter ? (
+                            {whole ? (
                               <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff", alignItems: "flex-start" }}>
-                                {charter.start === time && <span style={S.slotNameFull}>{charter.charterType === "group" ? "小組" : "包場"}{charter.coachName ? ` · ${charter.coachName}` : ""}</span>}
+                                {isLabelRow(whole.start, whole.hours, time) && (
+                                  <span style={S.slotLabelBlock}>
+                                    <span style={S.slotNameFull}>{rentalShort(whole.charterType)}{whole.coachName ? ` · ${whole.coachName}` : ""}</span>
+                                    <span style={S.slotTimeFull}>{whole.start}–{addMinutes(whole.start, whole.hours * 60)}</span>
+                                  </span>
+                                )}
                               </div>
                             ) : here.length > 0 ? (
                               <div style={S.slotMulti}>
                                 {here.map((v, idx) => {
-                                  const c = getCoach(v.coachId);
-                                  const showLabel = v.start === time;
+                                  const showLabel = isLabelRow(v.start, v.hours, time);
+                                  const isTrial = v.type === "charter";
+                                  const c = isTrial ? null : getCoach(v.coachId);
                                   return (
-                                    <div key={idx} style={{ ...S.slotChip, background: c?.color + "33", borderLeft: `3px solid ${c?.color}` }}>
-                                      {showLabel && <span style={S.slotNameFull}>{c?.name}{v.type === "duo" ? " ²" : ""}</span>}
-                                      {showLabel && v.coachId === currentUser.id && hoursUntil(date, v.start) >= 24 && !isPast &&
+                                    <div key={idx} style={{ ...S.slotChip, background: isTrial ? "#ffffff22" : c?.color + "33", borderLeft: `3px solid ${isTrial ? "#fff" : c?.color}`, alignItems: "flex-start" }}>
+                                      {showLabel && (
+                                        <span style={S.slotLabelBlock}>
+                                          <span style={S.slotNameFull}>{isTrial ? `試堂${v.coachName ? " · " + v.coachName : ""}` : `${c?.name}${v.type === "duo" ? " ²" : ""}`}</span>
+                                          <span style={S.slotTimeFull}>{v.start}–{addMinutes(v.start, v.hours * 60)}</span>
+                                        </span>
+                                      )}
+                                      {showLabel && !isTrial && v.coachId === currentUser.id && hoursUntil(date, v.start) >= 24 && !isPast &&
                                         <button style={S.cancelSlotBtn} onClick={() => openCancel(date, v.start, v.coachId, v.type)}>✕</button>}
                                     </div>
                                   );
@@ -1137,16 +1310,18 @@ const S = {
   gridHint: { color: "#666", fontSize: 11, marginBottom: 10 },
   calScroll: { overflowX: "auto", borderRadius: 12, border: "1px solid #222", maxHeight: "60vh", overflowY: "auto" },
   table: { width: "100%", borderCollapse: "collapse", minWidth: 600 },
-  thTime: { width: 50 },
-  th: { padding: "10px 4px", textAlign: "center", background: "#1a1a1a", borderBottom: "1px solid #222", position: "sticky", top: 0 },
+  thTime: { width: 50, position: "sticky", left: 0, top: 0, zIndex: 4, background: "#1a1a1a" },
+  th: { padding: "10px 4px", textAlign: "center", background: "#1a1a1a", borderBottom: "1px solid #222", position: "sticky", top: 0, zIndex: 2 },
   dayLabel: { color: "#888", fontSize: 11 },
   dateLabel: { color: "#fff", fontWeight: 700, fontSize: 16 },
-  tdTime: { fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap" },
+  tdTime: { fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap", position: "sticky", left: 0, zIndex: 1, background: "#0f0f0f" },
   td: { padding: "1px", borderLeft: "1px solid #161616" },
   slotMulti: { display: "flex", gap: 1, minHeight: 30 },
   slotChip: { flex: 1, borderRadius: 3, padding: "2px 3px", display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 30, minWidth: 0 },
   slotName: { fontSize: 10, fontWeight: 700, color: "#fff" },
   slotNameFull: { fontSize: 9, fontWeight: 700, color: "#fff", lineHeight: 1.1, wordBreak: "break-word", overflow: "hidden" },
+  slotLabelBlock: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0, overflow: "hidden" },
+  slotTimeFull: { fontSize: 8, color: "#ffffffcc", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden" },
   cancelSlotBtn: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 10, padding: 0 },
   slotEmpty: { width: "100%", minHeight: 20, background: "#1a1a1a", border: "none", borderRadius: 3, color: "#3a3a3a", fontSize: 13, cursor: "pointer" },
   slotEmptyRO: { minHeight: 20, background: "#1a1a1a", borderRadius: 3 },
@@ -1175,6 +1350,7 @@ const S = {
   soloTag: { fontSize: 10, color: "#4ECDC4", background: "#13302e", padding: "1px 6px", borderRadius: 6, marginLeft: 4 },
   charterTag: { fontSize: 10, color: "#111", background: "#fff", padding: "1px 6px", borderRadius: 6, marginLeft: 4, fontWeight: 700 },
   duoTag: { fontSize: 10, color: "#FFB347", background: "#33260f", padding: "1px 6px", borderRadius: 6, marginLeft: 4 },
+  cancelledTag: { fontSize: 10, color: "#FF8FA3", background: "#3a1515", padding: "1px 6px", borderRadius: 6, marginLeft: 4 },
   cancelBtn: { background: "#2a2a2a", border: "none", color: "#FF6B6B", borderRadius: 8, padding: "6px 12px", fontSize: 13, cursor: "pointer" },
   pastTag: { color: "#555", fontSize: 12 },
   lockTag: { color: "#FFB347", fontSize: 12 },
@@ -1191,6 +1367,12 @@ const S = {
   monthLabel: { fontSize: 13, color: "#999" },
   classNum: { fontWeight: 700, fontSize: 15, color: "#FFB347" },
   filterRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 },
+  filterWrap: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 },
+  recSummary: { background: "#151515", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#4ECDC4", fontWeight: 700, marginBottom: 12 },
+  donePill: { fontSize: 10, color: "#888", background: "#222", padding: "1px 6px", borderRadius: 6, marginLeft: 6 },
+  recDetail: { marginTop: 8, padding: "8px 10px", background: "#141414", borderRadius: 8, fontSize: 12, color: "#aaa", lineHeight: 1.7 },
+  lowWarnBox: { background: "#3a1515", color: "#FF8FA3", borderRadius: 10, padding: "10px 12px", fontSize: 12, marginTop: 12, lineHeight: 1.6 },
+  lowPill: { fontSize: 10, color: "#fff", background: "#FF6B6B", padding: "1px 6px", borderRadius: 6, marginLeft: 6, fontWeight: 700 },
   filterLabel: { fontSize: 13, color: "#aaa" },
   select: { background: "#2a2a2a", border: "1px solid #333", borderRadius: 8, padding: "8px 12px", color: "#fff", fontSize: 13, outline: "none" },
   linkBtn: { background: "transparent", border: "none", color: "#888", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: "2px 0", marginTop: 2 },
