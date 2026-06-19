@@ -89,6 +89,10 @@ export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
   const [currentUser, setCurrentUser] = useState(null);
   const [adminPassword, setAdminPassword] = useState(() => persisted("adminPassword", "admin123"));
+  const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", [
+    { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+    { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+  ]));
   const [view, setView] = useState("login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
   const [bookings, setBookings] = useState(() => persisted("bookings", {}));
@@ -112,6 +116,7 @@ export default function App() {
     if (!d) return;
     if (d.coaches !== undefined) setCoaches(d.coaches);
     if (d.adminPassword !== undefined) setAdminPassword(d.adminPassword);
+    if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
     if (d.bookings !== undefined) setBookings(d.bookings);
     if (d.purchaseLog !== undefined) setPurchaseLog(d.purchaseLog);
     if (d.charterLog !== undefined) setCharterLog(d.charterLog);
@@ -130,7 +135,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -149,7 +154,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -165,7 +170,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [adminCancelModal, setAdminCancelModal] = useState(null); // {date,start,coachId,type}
@@ -195,6 +200,14 @@ export default function App() {
     if (uid === "admin") {
       if (loginForm.password === adminPassword) { setCurrentUser({ id: 0, name: "管理員", role: "admin" }); setView("admin"); }
       else showToast("管理員密碼錯誤", "error");
+      return;
+    }
+    const sub = subAdmins.find((s) => (s.username || "").toLowerCase() === uid && s.password === loginForm.password);
+    if (sub) {
+      setCurrentUser({ ...sub, role: "subadmin" });
+      setView("admin");
+      const firstAllowed = ["overview", "schedule", "coaches", "ledger", "records", "settings"].find((k) => sub.permissions?.[k]);
+      setAdminTab(firstAllowed || "settings");
       return;
     }
     const coach = coaches.find((c) => (c.username || "").toLowerCase() === uid && c.password === loginForm.password);
@@ -228,18 +241,24 @@ export default function App() {
   const openBook = (date, time) => {
     if (isClosedDay(date)) return showToast("星期四、五休息，不開放預約", "error");
     if (soldOut) return showToast("你已用晒購買堂數，請聯絡管理員增購", "error");
-    setBookModal({ date, time, sessionType: "solo", hours: 1 });
+    const allowSolo = liveUser.allowSolo !== false;
+    const allowDuo = liveUser.allowDuo !== false;
+    if (!allowSolo && !allowDuo) return showToast("你冇任何可用嘅預約類型，請聯絡管理員設定", "error");
+    setBookModal({ date, time, sessionType: allowSolo ? "solo" : "duo", hours: 1 });
   };
 
   const confirmBook = () => {
-    const { date, time, sessionType, hours } = bookModal;
+    const { date, time, sessionType, hours, students } = bookModal;
+    if (sessionType === "solo" && liveUser.allowSolo === false) { showToast("你冇一對一預約權限", "error"); return; }
+    if (sessionType === "duo" && liveUser.allowDuo === false) { showToast("你冇一對二預約權限", "error"); return; }
     const creditCost = hours; // 1hr = 1堂, 1.5hr = 1.5堂
     if (creditCost > remaining) { showToast("剩餘堂數不足", "error"); return; }
     const err = canPlace(date, time, hours);
     if (err) { showToast(err, "error"); return; }
     const price = sessionType === "duo" ? duoPrice(hours) : liveUser.rate * hours;
     const slots = slotsFor(time, hours);
-    const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const studentList = (students || "").split(/[,，、]/).map((s) => s.trim()).filter(Boolean).slice(0, 4);
+    const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, students: studentList, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
       slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -272,7 +291,8 @@ export default function App() {
 
   const openCancel = (date, start, coachId, type) => {
     const hrs = hoursUntil(date, start);
-    if (currentUser.role === "coach" && hrs < 24) return showToast("24小時內取消需要管理員協助", "error");
+    const win = getCoach(coachId)?.cancelWindowHours ?? 24;
+    if (currentUser.role === "coach" && hrs < win) return showToast(`${win}小時內取消需要管理員協助`, "error");
     setCancelModal({ date, start, coachId, type });
   };
 
@@ -301,8 +321,9 @@ export default function App() {
     }, ...prev]);
     if (meta.type !== "charter") {
       setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - meta.hours) } : c));
-      // 由管理員協助、而且係 24 小時內嘅取消，計入該教練本月額度
-      if (byAdmin && hoursUntil(date, start) < 24) {
+      // 由管理員協助、而且係該教練設定嘅通知時數內取消，計入本月額度
+      const win = getCoach(coachId)?.cancelWindowHours ?? 24;
+      if (byAdmin && hoursUntil(date, start) < win) {
         setAssistCancelLog((prev) => [{ coachId, month: monthKey(formatDate(new Date())), date, start }, ...prev]);
       }
     } else {
@@ -324,6 +345,10 @@ export default function App() {
     if (currentUser.role === "admin") {
       if (pwForm.old !== adminPassword) return showToast("舊密碼錯誤", "error");
       setAdminPassword(pwForm.new1);
+    } else if (currentUser.role === "subadmin") {
+      const me = subAdmins.find((s) => s.id === currentUser.id);
+      if (!me || pwForm.old !== me.password) return showToast("舊密碼錯誤", "error");
+      setSubAdmins((prev) => prev.map((s) => s.id === currentUser.id ? { ...s, password: pwForm.new1 } : s));
     } else {
       if (pwForm.old !== getCoach(currentUser.id).password) return showToast("舊密碼錯誤", "error");
       setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, password: pwForm.new1 } : c));
@@ -513,14 +538,21 @@ export default function App() {
     const coachPaid = {};
     coaches.forEach((c) => { coachPaid[c.id] = purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.amount, 0) + initialCreditsOf(c) * c.rate; });
 
+    const isSubAdmin = currentUser.role === "subadmin";
+    const visibleTabs = [["overview", "📊 總覽"], ["schedule", "📅 課表"], ["coaches", "👥 教練"], ["ledger", "💰 流水帳"], ["records", "📋 記錄"], ["settings", "⚙️ 設定"]]
+      .filter(([k]) => !isSubAdmin || currentUser.permissions?.[k]);
     return (
       <div style={S.appBg}>
-        <Header title="管理員" onLogout={logout} syncState={syncState} />
+        <Header title={isSubAdmin ? `副管理員 · ${currentUser.name}` : "管理員"} onLogout={logout} syncState={syncState} />
         <div style={S.tabRow}>
-          {[["overview", "📊 總覽"], ["schedule", "📅 課表"], ["coaches", "👥 教練"], ["ledger", "💰 流水帳"], ["records", "📋 記錄"], ["settings", "⚙️ 設定"]].map(([k, label]) => (
+          {visibleTabs.map(([k, label]) => (
             <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}>{label}</button>
           ))}
         </div>
+
+        {isSubAdmin && !visibleTabs.some(([k]) => k === adminTab) && (
+          <div style={S.container}><p style={S.emptyText}>你呢個帳戶暫時冇任何已啟用嘅功能，請聯絡管理員開通。</p></div>
+        )}
 
         {adminTab === "overview" && (
           <div style={S.container}>
@@ -684,7 +716,7 @@ export default function App() {
                     <div style={S.bookingCoach}>{c.name} <span style={S.idTag}>@{c.username}</span></div>
                     <div style={S.bookingTime}>堂數 {c.used}/{c.credits}　每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
                   </div>
-                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1 })}>+ 堂</button>
+                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, expiryDate: "" })}>+ 堂</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
                 </div>
@@ -839,7 +871,7 @@ export default function App() {
 
         {adminTab === "settings" && (
           <div style={S.container}>
-            <h2 style={S.sectionTitle}>修改管理員密碼</h2>
+            <h2 style={S.sectionTitle}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
             <div style={S.formCard}>
               <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
               <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
@@ -856,11 +888,51 @@ export default function App() {
               <p style={{ ...S.assistHint, marginTop: 10 }}>※ 若下載冇反應（手機 app 常見），可改按「複製流水帳」再貼入 Excel / Google Sheets；或喺電腦瀏覽器開啟再匯出。</p>
             </div>
 
-            <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>重設資料</h2>
-            <div style={S.formCard}>
-              <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>清除呢部裝置嘅所有資料，回復至初始狀態。建議先匯出備份。此動作無法復原。</p>
-              <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff" }} onClick={() => setResetModal(true)}>🗑️ 重設所有資料</button>
-            </div>
+            {currentUser.role === "admin" && (
+              <>
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>副管理員帳戶</h2>
+                <p style={S.gridHint}>副管理員可登入並使用下面開啟咗嘅分頁，但唔可以管理副管理員帳戶本身或重設資料。</p>
+                <div style={S.bookingList}>
+                  {subAdmins.map((s) => (
+                    <div key={s.id} style={S.formCard}>
+                      <Field label="顯示名稱"><input style={S.input} value={s.name} onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, name: e.target.value } : x))} /></Field>
+                      <Field label="登入帳號名稱"><input style={S.input} value={s.username} onChange={(e) => {
+                        const v = e.target.value.trim().toLowerCase();
+                        if (v === "admin") { showToast("帳號名稱不可用 admin", "error"); return; }
+                        const dup = coaches.some((c) => (c.username || "").toLowerCase() === v) || subAdmins.some((x) => x.id !== s.id && (x.username || "").toLowerCase() === v);
+                        if (dup) { showToast("帳號名稱已被使用", "error"); return; }
+                        setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, username: e.target.value } : x));
+                      }} /></Field>
+                      <Field label="密碼"><input style={S.input} value={s.password} onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, password: e.target.value } : x))} /></Field>
+                      <label style={S.label}>可使用分頁</label>
+                      <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
+                        {[["overview", "總覽"], ["schedule", "課表"], ["coaches", "教練"], ["ledger", "流水帳"], ["records", "記錄"], ["settings", "設定"]].map(([k, label]) => (
+                          <label key={k} style={S.checkLabel}>
+                            <input type="checkbox" checked={!!s.permissions?.[k]}
+                              onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, permissions: { ...x.permissions, [k]: e.target.checked } } : x))} /> {label}
+                          </label>
+                        ))}
+                      </div>
+                      <button style={{ ...S.delBtn, marginTop: 12 }} onClick={() => { setSubAdmins((prev) => prev.filter((x) => x.id !== s.id)); showToast("已刪除副管理員"); }}>刪除呢個帳戶</button>
+                    </div>
+                  ))}
+                </div>
+                <button style={{ ...S.addBtn, marginTop: 12 }} onClick={() => {
+                  const newId = Math.max(0, ...subAdmins.map((s) => s.id)) + 1;
+                  setSubAdmins((prev) => [...prev, { id: newId, username: `subadmin${newId}`, password: "1234", name: `副管理員${newId}`, permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } }]);
+                }}>+ 新增副管理員</button>
+              </>
+            )}
+
+            {currentUser.role === "admin" && (
+              <>
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>重設資料</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>清除呢部裝置嘅所有資料，回復至初始狀態。建議先匯出備份。此動作無法復原。</p>
+                  <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff" }} onClick={() => setResetModal(true)}>🗑️ 重設所有資料</button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -891,10 +963,11 @@ export default function App() {
             <h3 style={S.modalTitle}>增加堂數</h3>
             <p style={S.modalText}>{getCoach(addCreditModal.coachId)?.name}　每堂 ${getCoach(addCreditModal.coachId)?.rate}</p>
             <Field label="增加幾多堂"><input style={S.input} type="number" min="1" value={addCreditModal.qty} onChange={(e) => setAddCreditModal({ ...addCreditModal, qty: parseInt(e.target.value) || 1 })} /></Field>
+            <Field label="失效日期（留空＝無限期）"><input style={S.input} type="date" value={addCreditModal.expiryDate || ""} onChange={(e) => setAddCreditModal({ ...addCreditModal, expiryDate: e.target.value })} /></Field>
             <p style={S.amountPreview}>金額：${((getCoach(addCreditModal.coachId)?.rate || 0) * addCreditModal.qty).toLocaleString()}</p>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setAddCreditModal(null)}>取消</button>
-              <button style={S.modalConfirm} onClick={() => { addCredits(addCreditModal.coachId, addCreditModal.qty); setAddCreditModal(null); }}>確認增加</button>
+              <button style={S.modalConfirm} onClick={() => { addCredits(addCreditModal.coachId, addCreditModal.qty, addCreditModal.expiryDate); setAddCreditModal(null); }}>確認增加</button>
             </div>
           </div></div>
         )}
@@ -973,7 +1046,8 @@ export default function App() {
         )}
 
         {adminCancelModal && (() => {
-          const within24 = adminCancelModal.type !== "charter" && hoursUntil(adminCancelModal.date, adminCancelModal.start) < 24;
+          const win = adminCancelModal.type !== "charter" ? (getCoach(adminCancelModal.coachId)?.cancelWindowHours ?? 24) : 24;
+          const within24 = adminCancelModal.type !== "charter" && hoursUntil(adminCancelModal.date, adminCancelModal.start) < win;
           const used = adminCancelModal.type !== "charter" ? assistUsedThisMonth(adminCancelModal.coachId) : 0;
           const over = within24 && used >= ASSIST_CANCEL_LIMIT;
           return (
@@ -986,7 +1060,7 @@ export default function App() {
                   {over ? "⚠️ 已超出本月代取消額度" : "✓ 屬本月代取消額度範圍"}
                 </div>
                 <div style={{ fontSize: 12, color: "#999", marginTop: 4 }}>
-                  {getCoach(adminCancelModal.coachId)?.name}　本月已用 {used} / {ASSIST_CANCEL_LIMIT} 次
+                  {getCoach(adminCancelModal.coachId)?.name}　本月已用 {used} / {ASSIST_CANCEL_LIMIT} 次（通知時數 {win} 小時）
                   {over ? "，今次將超額。" : "。"}
                 </div>
               </div>
@@ -1052,6 +1126,10 @@ export default function App() {
               <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
                 try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
                 setCoaches(DEFAULT_COACHES); setAdminPassword("admin123"); setBookings({});
+                setSubAdmins([
+                  { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+                  { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+                ]);
                 setPurchaseLog([]); setCharterLog([]); setAssistCancelLog([]); setCancelLog([]);
                 setResetModal(false); showToast("已重設資料");
               }}>確認重設</button>
@@ -1074,7 +1152,7 @@ export default function App() {
         const left = Math.max(0, ASSIST_CANCEL_LIMIT - used);
         return (
           <div style={S.assistBar}>
-            <span>本月 24 小時內代取消額度</span>
+            <span>本月 {liveUser.cancelWindowHours ?? 24} 小時內代取消額度</span>
             <span style={{ color: left > 0 ? "#4ECDC4" : "#FF6B6B", fontWeight: 700 }}>剩 {left} / {ASSIST_CANCEL_LIMIT} 次</span>
           </div>
         );
@@ -1139,7 +1217,7 @@ export default function App() {
                                           <span style={S.slotTimeFull}>{v.start}–{addMinutes(v.start, v.hours * 60)}</span>
                                         </span>
                                       )}
-                                      {showLabel && !isTrial && v.coachId === currentUser.id && hoursUntil(date, v.start) >= 24 && !isPast &&
+                                      {showLabel && !isTrial && v.coachId === currentUser.id && hoursUntil(date, v.start) >= (liveUser.cancelWindowHours ?? 24) && !isPast &&
                                         <button style={S.cancelSlotBtn} onClick={() => openCancel(date, v.start, v.coachId, v.type)}>✕</button>}
                                     </div>
                                   );
@@ -1171,7 +1249,7 @@ export default function App() {
               {myBookings.map(({ date, start, hours, type }, i) => {
                 const hrs = hoursUntil(date, start);
                 const isPast = hrs < 0;
-                const locked = hrs >= 0 && hrs < 24;
+                const locked = hrs >= 0 && hrs < (liveUser.cancelWindowHours ?? 24);
                 return (
                   <div key={i} style={S.bookingItem}>
                     <div style={{ ...S.dot, background: liveUser.color }} />
@@ -1205,20 +1283,25 @@ export default function App() {
       {bookModal && (() => {
         const isDuo = bookModal.sessionType === "duo";
         const price = isDuo ? duoPrice(bookModal.hours) : liveUser.rate * bookModal.hours;
+        const allowSolo = liveUser.allowSolo !== false;
+        const allowDuo = liveUser.allowDuo !== false;
         return (
           <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
             <h3 style={{ ...S.modalTitle, textAlign: "center" }}>預約場地</h3>
             <p style={{ ...S.modalText, textAlign: "center" }}>{bookModal.date}　{bookModal.time}</p>
             <label style={S.label}>類型</label>
             <div style={S.segRow}>
-              <button style={!isDuo ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, sessionType: "solo" })}>1對1</button>
-              <button style={isDuo ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, sessionType: "duo" })}>1對2</button>
+              <button style={!allowSolo ? S.segDisabled : !isDuo ? S.segActive : S.seg} disabled={!allowSolo} onClick={() => allowSolo && setBookModal({ ...bookModal, sessionType: "solo" })}>1對1</button>
+              <button style={!allowDuo ? S.segDisabled : isDuo ? S.segActive : S.seg} disabled={!allowDuo} onClick={() => allowDuo && setBookModal({ ...bookModal, sessionType: "duo" })}>1對2</button>
             </div>
             <label style={{ ...S.label, marginTop: 14 }}>時長</label>
             <div style={S.segRow}>
               <button style={bookModal.hours === 1 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1 })}>1 小時</button>
               <button style={bookModal.hours === 1.5 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1.5 })}>1.5 小時</button>
             </div>
+            <label style={{ ...S.label, marginTop: 14 }}>學生名（最多4位，用逗號分隔，只有你自己睇到）</label>
+            <input style={S.input} value={bookModal.students || ""} placeholder="例如：Tom, Mary"
+              onChange={(e) => setBookModal({ ...bookModal, students: e.target.value })} />
             <div style={S.priceBox}>
               <div style={S.priceRow}><span>時段</span><span>{bookModal.time} – {addMinutes(bookModal.time, bookModal.hours * 60)}</span></div>
               <div style={S.priceRow}><span>扣堂數</span><span>{bookModal.hours} 堂</span></div>
@@ -1248,7 +1331,10 @@ export default function App() {
 }
 
 function EditCoachModal({ coach, onClose, onSave }) {
-  const [form, setForm] = useState({ id: coach.id, username: coach.username || "", name: coach.name, credits: coach.credits, rate: coach.rate, password: coach.password });
+  const [form, setForm] = useState({
+    id: coach.id, username: coach.username || "", name: coach.name, credits: coach.credits, rate: coach.rate, password: coach.password,
+    allowSolo: coach.allowSolo !== false, allowDuo: coach.allowDuo !== false, cancelWindowHours: coach.cancelWindowHours || 24,
+  });
   return (
     <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320, textAlign: "left" }}>
       <h3 style={S.modalTitle}>{coach.id ? "編輯教練" : "新增教練"}</h3>
@@ -1257,6 +1343,12 @@ function EditCoachModal({ coach, onClose, onSave }) {
       <Field label={coach.id ? "總購買堂數" : "初始購買堂數"}><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: parseInt(e.target.value) || 0 })} /></Field>
       <Field label="一對一每堂租金 ($)"><input style={S.input} type="number" value={form.rate} onChange={(e) => setForm({ ...form, rate: parseInt(e.target.value) || 0 })} /></Field>
       <Field label="密碼"><input style={S.input} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
+      <label style={S.label}>預約權限</label>
+      <div style={S.checkRow}>
+        <label style={S.checkLabel}><input type="checkbox" checked={form.allowSolo} onChange={(e) => setForm({ ...form, allowSolo: e.target.checked })} /> 允許一對一</label>
+        <label style={S.checkLabel}><input type="checkbox" checked={form.allowDuo} onChange={(e) => setForm({ ...form, allowDuo: e.target.checked })} /> 允許一對二</label>
+      </div>
+      <Field label="取消需管理員協助嘅時數（小時）"><input style={S.input} type="number" min="0" value={form.cancelWindowHours} onChange={(e) => setForm({ ...form, cancelWindowHours: parseInt(e.target.value) || 0 })} /></Field>
       {!coach.id && form.credits > 0 && <p style={S.amountPreview}>初始堂數記入流水帳：${(form.credits * form.rate).toLocaleString()}</p>}
       <div style={S.modalBtns}>
         <button style={S.modalCancel} onClick={onClose}>取消</button>
@@ -1379,8 +1471,11 @@ const S = {
   assistHint: { color: "#666", fontSize: 12, marginTop: 16 },
   amountPreview: { color: "#6BCB77", fontSize: 13, fontWeight: 600, margin: "4px 0 12px" },
   segRow: { display: "flex", gap: 8 },
+  checkRow: { display: "flex", gap: 16, marginBottom: 16 },
+  checkLabel: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#ccc", cursor: "pointer" },
   seg: { flex: 1, background: "#2a2a2a", border: "1px solid #333", color: "#aaa", borderRadius: 10, padding: "10px", cursor: "pointer", fontSize: 14 },
   segActive: { flex: 1, background: "#4ECDC4", border: "1px solid #4ECDC4", color: "#000", borderRadius: 10, padding: "10px", cursor: "pointer", fontSize: 14, fontWeight: 700 },
+  segDisabled: { flex: 1, background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#444", borderRadius: 10, padding: "10px", cursor: "not-allowed", fontSize: 14 },
   priceBox: { background: "#222", borderRadius: 10, padding: "12px 14px", margin: "16px 0" },
   priceRow: { display: "flex", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "3px 0" },
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 },
