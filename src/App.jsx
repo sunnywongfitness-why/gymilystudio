@@ -90,6 +90,7 @@ function buildEntryLines(v, isTrial, coachObj, isOwner) {
     if (isOwner && v.students && v.students.length > 0) lines.push({ text: v.students.join("、"), style: S.slotStudentsFull });
   }
   lines.push({ text: v.start, style: S.slotTimeFull });
+  lines.push({ text: addMinutes(v.start, v.hours * 60), style: S.slotBottomTime });
   return lines;
 }
 
@@ -182,6 +183,7 @@ export default function App() {
   }, [coaches, adminPassword, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
+  const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
   const [adminCancelModal, setAdminCancelModal] = useState(null); // {date,start,coachId,type}
   const [delLedgerModal, setDelLedgerModal] = useState(null); // ledger record to delete
   const [toast, setToast] = useState(null);
@@ -199,6 +201,9 @@ export default function App() {
   const [coachSort, setCoachSort] = useState("remain"); // remain|paid|name
   const [expandedCoachId, setExpandedCoachId] = useState(null);
   const [viewMonth, setViewMonth] = useState(() => monthKey(formatDate(new Date())));
+  const [monthsExpanded, setMonthsExpanded] = useState(false);
+  const [newStudentName, setNewStudentName] = useState("");
+  const [studentLogOpen, setStudentLogOpen] = useState(null);
   const [resetModal, setResetModal] = useState(false);
   const [delCoachModal, setDelCoachModal] = useState(null); // coach pending deletion
   const [showPasswords, setShowPasswords] = useState(false);
@@ -250,17 +255,39 @@ export default function App() {
     return null;
   };
 
+  // 將某一日嘅 booking 分配落 2 條「線」（座位），等已book嘅時段可以真正合併做一個跨幾行嘅格仔，
+  // 同一條線上嘅 entry 唔會撞時間，所以可以安全用 rowSpan；得返嗰條線繼續逐格顯示空格/「+」。
+  const buildDayPlan = (date) => {
+    const entries = [];
+    TIME_SLOTS.forEach((t) => { cellArr(date, t).forEach((e) => { if (e.start === t) entries.push(e); }); });
+    const wholeEntries = entries.filter(isWholeVenue);
+    const seatEntries = entries.filter((e) => !isWholeVenue(e));
+    seatEntries.sort((a, b) => slotIndex(a.start) - slotIndex(b.start));
+    const laneEndRow = [-1, -1];
+    seatEntries.forEach((e) => {
+      const startRow = slotIndex(e.start);
+      const span = Math.round(e.hours * 4);
+      const endRow = startRow + span - 1;
+      const lane = laneEndRow[0] < startRow ? 0 : (laneEndRow[1] < startRow ? 1 : null);
+      if (lane !== null) { e._lane = lane; laneEndRow[lane] = endRow; }
+    });
+    const plan = TIME_SLOTS.map(() => ({ whole: null, lane0: null, lane1: null }));
+    wholeEntries.forEach((e) => { const r = slotIndex(e.start); if (plan[r]) plan[r].whole = e; });
+    seatEntries.forEach((e) => { if (e._lane == null) return; const r = slotIndex(e.start); if (plan[r]) plan[r][`lane${e._lane}`] = e; });
+    return plan;
+  };
+
   const openBook = (date, time) => {
     if (isClosedDay(date)) return showToast("星期四、五休息，不開放預約", "error");
     if (soldOut) return showToast("你已用晒購買堂數，請聯絡管理員增購", "error");
     const allowSolo = liveUser.allowSolo !== false;
     const allowDuo = liveUser.allowDuo !== false;
     if (!allowSolo && !allowDuo) return showToast("你冇任何可用嘅預約類型，請聯絡管理員設定", "error");
-    setBookModal({ date, time, sessionType: allowSolo ? "solo" : "duo", hours: 1 });
+    setBookModal({ date, time, sessionType: allowSolo ? "solo" : "duo", hours: 1, students: [], studentOther: "" });
   };
 
   const confirmBook = () => {
-    const { date, time, sessionType, hours, students } = bookModal;
+    const { date, time, sessionType, hours } = bookModal;
     if (sessionType === "solo" && liveUser.allowSolo === false) { showToast("你冇一對一預約權限", "error"); return; }
     if (sessionType === "duo" && liveUser.allowDuo === false) { showToast("你冇一對二預約權限", "error"); return; }
     const creditCost = hours; // 1hr = 1堂, 1.5hr = 1.5堂
@@ -269,7 +296,9 @@ export default function App() {
     if (err) { showToast(err, "error"); return; }
     const price = sessionType === "duo" ? duoPrice(hours) : liveUser.rate * hours;
     const slots = slotsFor(time, hours);
-    const studentList = (students || "").split(/[,，、]/).map((s) => s.trim()).filter(Boolean).slice(0, 4);
+    const selected = Array.isArray(bookModal.students) ? bookModal.students : [];
+    const extra = (bookModal.studentOther || "").trim();
+    const studentList = [...selected, ...(extra ? [extra] : [])].filter(Boolean).slice(0, 4);
     const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, students: studentList, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
@@ -345,10 +374,43 @@ export default function App() {
     setCancelModal(null);
   };
 
+  // 學生簽到：將一個學生嘅簽名（base64 圖）寫入呢個 booking 嘅所有 15 分鐘格副本
+  const signIn = (date, start, coachId, type, studentName, dataUrl) => {
+    const startArr = cellArr(date, start);
+    const meta = startArr.find((e) => e.coachId === coachId && e.start === start && e.type === type);
+    if (!meta) return;
+    const slots = slotsFor(start, meta.hours);
+    setBookings((prev) => {
+      const u = { ...prev };
+      slots.forEach((s) => {
+        const arr = (u[`${date}_${s}`] || []).map((e) => {
+          if (e.coachId === coachId && e.start === start && e.type === type) {
+            return { ...e, signatures: { ...(e.signatures || {}), [studentName]: { dataUrl, signedAt: new Date().toISOString().slice(0, 16).replace("T", " ") } } };
+          }
+          return e;
+        });
+        u[`${date}_${s}`] = arr;
+      });
+      return u;
+    });
+    showToast(`${studentName} 已簽到`);
+  };
+
   // 教練本月已用 / 剩餘代取消額度
   const assistUsedThisMonth = (coachId) => {
     const m = monthKey(formatDate(new Date()));
     return assistCancelLog.filter((r) => r.coachId === coachId && r.month === m).length;
+  };
+
+  // 教練新增學生入自己嘅名單（去重、淨係自己改到自己嗰份）
+  const addStudentToRoster = () => {
+    const name = newStudentName.trim();
+    if (!name) return;
+    if (!isCoach) return;
+    const cur = liveUser.studentRoster || [];
+    if (cur.includes(name)) { showToast("呢個名已經喺名單度", "error"); return; }
+    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: [...(c.studentRoster || []), name] } : c));
+    setNewStudentName("");
   };
 
   const changePassword = () => {
@@ -495,26 +557,32 @@ export default function App() {
     const date = k.split("_")[0];
     arr.forEach((v) => {
       if (v.coachId === currentUser?.id && k === `${date}_${v.start}`)
-        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, price: v.price || 0, students: v.students || [] });
+        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, price: v.price || 0, students: v.students || [], signatures: v.signatures || {} });
     });
   });
   myBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
 
-  // 教練本月實際收入 + 每位學生本月消費（多人 session 平均分攤）
-  const myMonthIncome = (() => {
-    if (!isCoach) return { total: 0, byStudent: [] };
-    const tm = monthKey(formatDate(new Date()));
-    const thisMonthBookings = myBookings.filter((b) => monthKey(b.date) === tm);
-    const total = thisMonthBookings.reduce((s, b) => s + (b.price || 0), 0);
-    const byStudentMap = {};
-    thisMonthBookings.forEach((b) => {
-      const names = b.students && b.students.length ? b.students : [];
-      if (names.length === 0) return;
-      const share = (b.price || 0) / names.length;
-      names.forEach((n) => { byStudentMap[n] = (byStudentMap[n] || 0) + share; });
+  // 教練近3個月實際收入（扣除租場費用）+ 各學生上堂紀錄
+  const myIncomeReport = (() => {
+    if (!isCoach) return { months: [], studentLog: {} };
+    const now = new Date();
+    const months = [0, 1, 2].map((i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const tm = monthKey(formatDate(d));
+      const bs = myBookings.filter((b) => monthKey(b.date) === tm);
+      const gross = bs.reduce((s, b) => s + (b.price || 0), 0);
+      const rentalCost = bs.reduce((s, b) => s + (liveUser.rate || 0) * b.hours, 0);
+      return { month: tm, gross, rentalCost, net: gross - rentalCost, count: bs.length };
     });
-    const byStudent = Object.entries(byStudentMap).map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);
-    return { total, byStudent, month: tm };
+    const studentLog = {};
+    myBookings.forEach((b) => {
+      (b.students || []).forEach((n) => {
+        if (!studentLog[n]) studentLog[n] = [];
+        studentLog[n].push({ date: b.date, start: b.start, hours: b.hours, type: b.type });
+      });
+    });
+    Object.values(studentLog).forEach((arr) => arr.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`)));
+    return { months, studentLog };
   })();
 
   // ---------- LOGIN ----------
@@ -616,9 +684,14 @@ export default function App() {
             </div>
             <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}</p>
 
-            <h2 style={S.sectionTitle}>每月收入</h2>
+            <div style={{ ...S.flexBetween, marginBottom: 0 }}>
+              <h2 style={S.sectionTitle}>每月收入</h2>
+              {allMonths.length > 6 && (
+                <button style={S.linkBtn} onClick={() => setMonthsExpanded((v) => !v)}>{monthsExpanded ? "收埋" : `顯示全部（${allMonths.length}）`}</button>
+              )}
+            </div>
             <div style={S.bookingList}>
-              {allMonths.length === 0 ? <p style={S.emptyText}>暫無收入</p> : allMonths.map((m) => (
+              {allMonths.length === 0 ? <p style={S.emptyText}>暫無收入</p> : (monthsExpanded ? allMonths : allMonths.slice(0, 6)).map((m) => (
                 <div key={m} style={S.monthCard}>
                   <div style={S.monthHead}>{m === "初始" ? "初始已售堂數" : m}</div>
                   <div style={S.monthRow}><span style={S.monthLabel}>一筆過租金（買堂）</span><span style={S.revenueNum}>${(purchaseByMonth[m] || 0).toLocaleString()}</span></div>
@@ -626,6 +699,7 @@ export default function App() {
                 </div>
               ))}
             </div>
+            {!monthsExpanded && allMonths.length > 6 && <p style={S.assistHint}>顯示最近 6 個月，撳上面「顯示全部」睇齊歷史。</p>}
             <p style={S.assistHint}>「一筆過租金」= 教練買堂時實收現金；「實際堂數收入」= 當月實際 book 咗嘅堂（一對一／一對二／包場）價值。</p>
 
             <div style={{ ...S.flexBetween, marginTop: 24 }}>
@@ -708,7 +782,10 @@ export default function App() {
           </div>
         )}
 
-        {adminTab === "schedule" && (
+        {adminTab === "schedule" && (() => {
+          const dayPlans = {}; const dayCov = {};
+          days.forEach((d) => { const date = formatDate(d); dayPlans[date] = buildDayPlan(date); dayCov[date] = { whole: 0, lane0: 0, lane1: 0 }; });
+          return (
           <div style={S.calContainer}>
             <h2 style={S.sectionTitle}>全部教練課表</h2>
             <p style={S.gridHint}>一覽所有教練同其他租場嘅預約。撳已預約嘅格協助取消；撳空格可落其他租場（包場／小組／試堂）。</p>
@@ -720,64 +797,80 @@ export default function App() {
             <div style={S.calScroll}>
               <table style={S.table}>
                 <thead><tr><th style={S.thTime}></th>
-                  {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}</th>; })}
+                  {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); return <th key={d} colSpan={2} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}</th>; })}
                 </tr></thead>
                 <tbody>
-                  {TIME_SLOTS.map((time) => {
+                  {TIME_SLOTS.map((time, rowIdx) => {
                     const isHourStart = time.endsWith(":00");
                     return (
                       <tr key={time}>
                         <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
                         {days.map((d) => {
                           const date = formatDate(d);
-                          const here = cellArr(date, time);
-                          const occ = occupancy(date, time);
-                          const whole = here.find(isWholeVenue);
+                          const cov = dayCov[date];
+                          const cell = dayPlans[date][rowIdx];
                           const isPast = hoursUntil(date, time) < 0;
                           const closed = isClosedDay(date);
-                          const canAdd = occ < MAX_CONCURRENT && !isPast && !closed;
-                          return (
-                            <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616", background: closed && here.length === 0 ? "#0c0c0c" : undefined }}>
-                              {whole ? (() => {
-                                const span = Math.round(whole.hours * 4);
-                                const relRow = slotIndex(time) - slotIndex(whole.start);
-                                const lines = buildEntryLines(whole, false, null, false);
-                                let node = null;
-                                if (span === 1) node = <span style={lines[0].style}>{lines[0].text}</span>;
-                                else if (relRow < span - 1 && relRow < lines.length) node = <span style={lines[relRow].style}>{lines[relRow].text}</span>;
-                                else if (relRow === span - 1) node = <span style={S.slotBottomTime}>{addMinutes(whole.start, whole.hours * 60)}</span>;
-                                return (
-                                  <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff" }}>
-                                    {node}
-                                    {relRow === 0 && <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: whole.start, coachId: 0, type: "charter" })}>✕</button>}
-                                  </div>
-                                );
-                              })() : here.length > 0 ? (
-                                <div style={S.slotMulti}>
-                                  {here.map((v, idx) => {
-                                    const isTrial = v.type === "charter";
-                                    const c = isTrial ? null : getCoach(v.coachId);
-                                    const span = Math.round(v.hours * 4);
-                                    const relRow = slotIndex(time) - slotIndex(v.start);
-                                    const lines = buildEntryLines(v, isTrial, c, false);
-                                    let node = null;
-                                    if (span === 1) node = <span style={lines[0].style}>{lines[0].text}</span>;
-                                    else if (relRow < span - 1 && relRow < lines.length) node = <span style={lines[relRow].style}>{lines[relRow].text}</span>;
-                                    else if (relRow === span - 1) node = <span style={S.slotBottomTime}>{addMinutes(v.start, v.hours * 60)}</span>;
-                                    return (
-                                      <div key={idx} style={{ ...S.slotChip, background: isTrial ? "#ffffff22" : c?.color + "33", borderLeft: `3px solid ${isTrial ? "#fff" : c?.color}` }}>
-                                        {node}
-                                        {relRow === 0 && <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: v.start, coachId: v.coachId, type: v.type })}>✕</button>}
-                                      </div>
-                                    );
-                                  })}
-                                  {canAdd && <button style={S.slotAdd} onClick={() => setCharterModal({ date, time, charterType: "trial", hours: 1, price: 0, coachName: "" })}>+</button>}
+                          const occ = occupancy(date, time);
+                          const tdBase = { ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616" };
+
+                          if (cov.whole > 0) { cov.whole--; return null; }
+                          if (cell.whole) {
+                            const span = Math.round(cell.whole.hours * 4);
+                            cov.whole = span - 1;
+                            const lines = buildEntryLines(cell.whole, false, null, false);
+                            return (
+                              <td key={date} colSpan={2} rowSpan={span} style={tdBase}>
+                                <div style={{ ...S.slotChipMerged, background: "#ffffff22", borderLeft: "3px solid #fff" }}>
+                                  <button style={S.cancelSlotBtnAbs} onClick={() => setAdminCancelModal({ date, start: cell.whole.start, coachId: 0, type: "charter" })}>✕</button>
+                                  {lines.map((l, i) => <span key={i} style={l.style}>{l.text}</span>)}
                                 </div>
-                              ) : closed ? <div style={S.slotClosed} />
-                                : isPast ? <div style={S.slotPast} />
-                                : <button style={S.slotEmpty} onClick={() => setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "" })}>+</button>}
-                            </td>
-                          );
+                              </td>
+                            );
+                          }
+
+                          const lane0Active = cov.lane0 > 0 || cell.lane0;
+                          const lane1Active = cov.lane1 > 0 || cell.lane1;
+                          if (!lane0Active && !lane1Active) {
+                            return (
+                              <td key={date} colSpan={2} style={{ ...tdBase, background: closed ? "#0c0c0c" : undefined }}>
+                                {closed ? <div style={S.slotClosed} />
+                                  : isPast ? <div style={S.slotPast} />
+                                  : <button style={S.slotEmpty} onClick={() => setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "" })}>+</button>}
+                              </td>
+                            );
+                          }
+
+                          const laneTd = (laneKey) => {
+                            if (cov[laneKey] > 0) { cov[laneKey]--; return null; }
+                            const v = cell[laneKey];
+                            if (v) {
+                              const span = Math.round(v.hours * 4);
+                              cov[laneKey] = span - 1;
+                              const isTrial = v.type === "charter";
+                              const c = isTrial ? null : getCoach(v.coachId);
+                              const lines = buildEntryLines(v, isTrial, c, false);
+                              return (
+                                <td key={date + laneKey} rowSpan={span} style={tdBase}>
+                                  <div style={{ ...S.slotChipMerged, background: isTrial ? "#ffffff22" : c?.color + "33", borderLeft: `3px solid ${isTrial ? "#fff" : c?.color}` }}>
+                                    <button style={S.cancelSlotBtnAbs} onClick={() => setAdminCancelModal({ date, start: v.start, coachId: v.coachId, type: v.type })}>✕</button>
+                                    {lines.map((l, i) => <span key={i} style={l.style}>{l.text}</span>)}
+                                  </div>
+                                </td>
+                              );
+                            }
+                            const canAddHere = occ < MAX_CONCURRENT && !isPast && !closed;
+                            return (
+                              <td key={date + laneKey} style={{ ...tdBase, background: closed ? "#0c0c0c" : undefined }}>
+                                {closed ? <div style={S.slotClosed} />
+                                  : isPast ? <div style={S.slotPast} />
+                                  : canAddHere ? <button style={S.slotAdd2} onClick={() => setCharterModal({ date, time, charterType: "trial", hours: 1, price: 0, coachName: "" })}>+</button>
+                                  : <div style={S.slotDisabled} />}
+                              </td>
+                            );
+                          };
+
+                          return <>{laneTd("lane0")}{laneTd("lane1")}</>;
                         })}
                       </tr>
                     );
@@ -787,7 +880,8 @@ export default function App() {
             </div>
             <p style={S.assistHint}>² = 1對2　｜　白色 = 其他租場（包場／小組／試堂）</p>
           </div>
-        )}
+          );
+        })()}
 
         {adminTab === "coaches" && (
           <div style={S.container}>
@@ -1266,11 +1360,14 @@ export default function App() {
       <div style={S.tabRow}>
         <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}>📅 預約場地</button>
         <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}>📋 我的預約 {myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}</button>
-        <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}>💰 我的收入</button>
+        <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}>📈 上堂情況</button>
         <button style={view === "pw" ? S.tabActive : S.tab} onClick={() => setView("pw")}>🔑 改密碼</button>
       </div>
 
-      {view === "calendar" && (
+      {view === "calendar" && (() => {
+        const dayPlans = {}; const dayCov = {};
+        days.forEach((d) => { const date = formatDate(d); dayPlans[date] = buildDayPlan(date); dayCov[date] = { whole: 0, lane0: 0, lane1: 0 }; });
+        return (
         <div style={S.calContainer}>
           <div style={S.weekNav}>
             <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
@@ -1281,63 +1378,89 @@ export default function App() {
           <div style={S.calScroll}>
             <table style={S.table}>
               <thead><tr><th style={S.thTime}></th>
-                {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}</th>; })}
+                {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); return <th key={d} colSpan={2} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}</th>; })}
               </tr></thead>
               <tbody>
-                {TIME_SLOTS.map((time) => {
+                {TIME_SLOTS.map((time, rowIdx) => {
                   const isHourStart = time.endsWith(":00");
                   return (
                     <tr key={time}>
                       <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
                       {days.map((d) => {
                         const date = formatDate(d);
-                        const here = cellArr(date, time);
-                        const occ = occupancy(date, time);
-                        const whole = here.find(isWholeVenue);
+                        const cov = dayCov[date];
+                        const cell = dayPlans[date][rowIdx];
                         const isPast = hoursUntil(date, time) < 0;
                         const closed = isClosedDay(date);
-                        const iAmHere = here.some((v) => v.coachId === currentUser.id && v.type !== "charter");
-                        const canAddHere = !whole && occ < MAX_CONCURRENT && !iAmHere && !isPast && !soldOut && !closed;
-                        return (
-                          <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616", background: closed && here.length === 0 ? "#0c0c0c" : undefined }}>
-                            {whole ? (() => {
-                              const span = Math.round(whole.hours * 4);
-                              const relRow = slotIndex(time) - slotIndex(whole.start);
-                              const lines = buildEntryLines(whole, false, null, false);
-                              let node = null;
-                              if (span === 1) node = <span style={lines[0].style}>{lines[0].text}</span>;
-                              else if (relRow < span - 1 && relRow < lines.length) node = <span style={lines[relRow].style}>{lines[relRow].text}</span>;
-                              else if (relRow === span - 1) node = <span style={S.slotBottomTime}>{addMinutes(whole.start, whole.hours * 60)}</span>;
-                              return <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff" }}>{node}</div>;
-                            })() : here.length > 0 ? (
-                              <div style={S.slotMulti}>
-                                {here.map((v, idx) => {
-                                  const isTrial = v.type === "charter";
-                                  const c = isTrial ? null : getCoach(v.coachId);
-                                  const isOwner = currentUser.role === "coach" && v.coachId === currentUser.id;
-                                  const span = Math.round(v.hours * 4);
-                                  const relRow = slotIndex(time) - slotIndex(v.start);
-                                  const lines = buildEntryLines(v, isTrial, c, isOwner);
-                                  let node = null;
-                                  if (span === 1) node = <span style={lines[0].style}>{lines[0].text}</span>;
-                                  else if (relRow < span - 1 && relRow < lines.length) node = <span style={lines[relRow].style}>{lines[relRow].text}</span>;
-                                  else if (relRow === span - 1) node = <span style={S.slotBottomTime}>{addMinutes(v.start, v.hours * 60)}</span>;
-                                  const showCancel = relRow === 0 && !isTrial && v.coachId === currentUser.id && hoursUntil(date, v.start) >= (liveUser.cancelWindowHours ?? 24) && !isPast;
-                                  return (
-                                    <div key={idx} style={{ ...S.slotChip, background: isTrial ? "#ffffff22" : c?.color + "33", borderLeft: `3px solid ${isTrial ? "#fff" : c?.color}` }}>
-                                      {node}
-                                      {showCancel && <button style={S.cancelSlotBtn} onClick={() => openCancel(date, v.start, v.coachId, v.type)}>✕</button>}
-                                    </div>
-                                  );
-                                })}
-                                {canAddHere && <button style={S.slotAdd} onClick={() => openBook(date, time)}>+</button>}
+                        const tdBase = { ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616" };
+
+                        // 包場/小組：全場獨佔，colSpan=2
+                        if (cov.whole > 0) { cov.whole--; return null; }
+                        if (cell.whole) {
+                          const span = Math.round(cell.whole.hours * 4);
+                          cov.whole = span - 1;
+                          const lines = buildEntryLines(cell.whole, false, null, false);
+                          return (
+                            <td key={date} colSpan={2} rowSpan={span} style={tdBase}>
+                              <div style={{ ...S.slotChipMerged, background: "#ffffff22", borderLeft: "3px solid #fff" }}>
+                                {lines.map((l, i) => <span key={i} style={l.style}>{l.text}</span>)}
                               </div>
-                            ) : closed ? <div style={S.slotClosed} />
-                              : isPast ? <div style={S.slotPast} />
-                              : soldOut ? <div style={S.slotDisabled} />
-                              : <button style={S.slotEmpty} onClick={() => openBook(date, time)}>+</button>}
-                          </td>
-                        );
+                            </td>
+                          );
+                        }
+
+                        // 兩條線都冇嘢、亦冇新 entry 開始 -> 一個 colSpan=2 嘅空格/「+」
+                        const lane0Active = cov.lane0 > 0 || cell.lane0;
+                        const lane1Active = cov.lane1 > 0 || cell.lane1;
+                        const occ = occupancy(date, time);
+                        if (!lane0Active && !lane1Active) {
+                          const iAmHere = false; // 完全空格，肯定唔係自己
+                          const canAddHere = occ < MAX_CONCURRENT && !isPast && !soldOut && !closed;
+                          return (
+                            <td key={date} colSpan={2} style={{ ...tdBase, background: closed ? "#0c0c0c" : undefined }}>
+                              {closed ? <div style={S.slotClosed} />
+                                : isPast ? <div style={S.slotPast} />
+                                : soldOut ? <div style={S.slotDisabled} />
+                                : <button style={S.slotEmpty} onClick={() => openBook(date, time)}>+</button>}
+                            </td>
+                          );
+                        }
+
+                        // 逐條線獨立處理
+                        const laneTd = (laneKey) => {
+                          if (cov[laneKey] > 0) { cov[laneKey]--; return null; }
+                          const v = cell[laneKey];
+                          if (v) {
+                            const span = Math.round(v.hours * 4);
+                            cov[laneKey] = span - 1;
+                            const isTrial = v.type === "charter";
+                            const c = isTrial ? null : getCoach(v.coachId);
+                            const isOwner = currentUser.role === "coach" && v.coachId === currentUser.id;
+                            const lines = buildEntryLines(v, isTrial, c, isOwner);
+                            const showCancel = !isTrial && v.coachId === currentUser.id && hoursUntil(date, v.start) >= (liveUser.cancelWindowHours ?? 24) && !isPast;
+                            return (
+                              <td key={date + laneKey} rowSpan={span} style={tdBase}>
+                                <div style={{ ...S.slotChipMerged, background: isTrial ? "#ffffff22" : c?.color + "33", borderLeft: `3px solid ${isTrial ? "#fff" : c?.color}` }}>
+                                  {showCancel && <button style={S.cancelSlotBtnAbs} onClick={() => openCancel(date, v.start, v.coachId, v.type)}>✕</button>}
+                                  {lines.map((l, i) => <span key={i} style={l.style}>{l.text}</span>)}
+                                </div>
+                              </td>
+                            );
+                          }
+                          // 呢條線喺呢一行係空嘅（可能另一條線正佔住個 booking）
+                          const canAddHere = occ < MAX_CONCURRENT && !isPast && !soldOut && !closed;
+                          return (
+                            <td key={date + laneKey} style={{ ...tdBase, background: closed ? "#0c0c0c" : undefined }}>
+                              {closed ? <div style={S.slotClosed} />
+                                : isPast ? <div style={S.slotPast} />
+                                : soldOut ? <div style={S.slotDisabled} />
+                                : canAddHere ? <button style={S.slotAdd2} onClick={() => openBook(date, time)}>+</button>
+                                : <div style={S.slotDisabled} />}
+                            </td>
+                          );
+                        };
+
+                        return <>{laneTd("lane0")}{laneTd("lane1")}</>;
                       })}
                     </tr>
                   );
@@ -1347,14 +1470,15 @@ export default function App() {
           </div>
           <p style={S.assistHint}>可預約任何時段；24小時內取消需管理員協助。² = 1對2</p>
         </div>
-      )}
+        );
+      })()}
 
       {view === "myBookings" && (
         <div style={S.container}>
           <h2 style={S.sectionTitle}>我的預約記錄</h2>
           {myBookings.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
             <div style={S.bookingList}>
-              {myBookings.map(({ date, start, hours, type, students }, i) => {
+              {myBookings.map(({ date, start, hours, type, students, signatures }, i) => {
                 const hrs = hoursUntil(date, start);
                 const isPast = hrs < 0;
                 const locked = hrs >= 0 && hrs < (liveUser.cancelWindowHours ?? 24);
@@ -1363,7 +1487,19 @@ export default function App() {
                     <div style={{ ...S.dot, background: liveUser.color }} />
                     <div style={{ flex: 1 }}>
                       <div style={S.bookingCoach}>{date} <span style={type === "duo" ? S.duoTag : S.soloTag}>{type === "duo" ? "1對2" : "1對1"}</span></div>
-                      <div style={S.bookingTime}>{start} – {addMinutes(start, hours * 60)}（{hours}小時）{students && students.length > 0 ? `　學生：${students.join("、")}` : ""}</div>
+                      <div style={S.bookingTime}>{start} – {addMinutes(start, hours * 60)}（{hours}小時）</div>
+                      {students && students.length > 0 && (
+                        <div style={S.signRow}>
+                          {students.map((name) => {
+                            const signed = signatures && signatures[name];
+                            return (
+                              <button key={name} style={signed ? S.signedChip : S.signChip} onClick={() => !signed && setSignModal({ date, start, coachId: currentUser.id, type, studentName: name })}>
+                                {signed ? `✓ ${name}` : `✍️ ${name}`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                     {isPast ? <span style={S.pastTag}>已完成</span>
                       : locked ? <span style={S.lockTag}>🔒 取消需管理員</span>
@@ -1376,27 +1512,71 @@ export default function App() {
         </div>
       )}
 
-      {view === "income" && (
+      {view === "income" && (() => {
+        const roster = liveUser.studentRoster || [];
+        return (
         <div style={S.container}>
-          <h2 style={S.sectionTitle}>我的收入（{myMonthIncome.month}）</h2>
-          <div style={S.kpiRow}>
-            <div style={S.kpiCard}><div style={S.kpiLabel}>本月實際收入</div><div style={S.kpiBig}>${myMonthIncome.total.toLocaleString()}</div></div>
+          <h2 style={S.sectionTitle}>我的收入（近3個月）</h2>
+          <p style={S.assistHint}>實際收入＝收費 － 租場費用（每堂租金 × 時長）。一對一通常為 $0（收費等於租場費用）；一對二／多人堂多收嘅部分先計入收入。</p>
+          <div style={S.bookingList}>
+            {myIncomeReport.months.map((m) => (
+              <div key={m.month} style={S.monthCard}>
+                <div style={S.monthHead}>{m.month}{m.month === monthKey(formatDate(new Date())) ? "（本月）" : ""}</div>
+                <div style={S.monthRow}><span style={S.monthLabel}>堂數</span><span>{m.count} 堂</span></div>
+                <div style={S.monthRow}><span style={S.monthLabel}>總收費</span><span>${m.gross.toLocaleString()}</span></div>
+                <div style={S.monthRow}><span style={S.monthLabel}>租場費用</span><span style={{ color: "#FF8FA3" }}>-${m.rentalCost.toLocaleString()}</span></div>
+                <div style={S.monthRow}><span style={{ ...S.monthLabel, fontWeight: 700, color: "#fff" }}>實際收入</span><span style={{ color: m.net >= 0 ? "#6BCB77" : "#FF6B6B", fontWeight: 700 }}>${m.net.toLocaleString()}</span></div>
+              </div>
+            ))}
           </div>
-          <h2 style={{ ...S.sectionTitle, marginTop: 24 }}>各學生本月消費</h2>
-          <p style={S.assistHint}>多人堂（一對二／小組等）金額會平均分俾每位列名嘅學生。冇填學生名嘅堂唔會計入此表。</p>
-          {myMonthIncome.byStudent.length === 0 ? <p style={S.emptyText}>暫無學生消費記錄</p> : (
+
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生名單</h2>
+          <p style={S.assistHint}>呢度新增嘅學生名，預約場地時可以直接喺名單度揀，唔使逐次打字。</p>
+          <div style={S.studentChipWrap}>
+            {roster.map((name) => (
+              <span key={name} style={S.rosterChip}>
+                {name}
+                <button style={S.rosterRemoveBtn} onClick={() => setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: (c.studentRoster || []).filter((n) => n !== name) } : c))}>✕</button>
+              </span>
+            ))}
+            {roster.length === 0 && <p style={S.emptyText}>仲未有學生，落面新增啦</p>}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <input style={S.input} value={newStudentName} placeholder="新學生名" onChange={(e) => setNewStudentName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addStudentToRoster()} />
+            <button style={{ ...S.creditBtn, whiteSpace: "nowrap" }} onClick={addStudentToRoster}>新增</button>
+          </div>
+
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生上課紀錄</h2>
+          {roster.length === 0 ? <p style={S.emptyText}>新增學生後，呢度會顯示佢哋嘅上堂紀錄</p> : (
             <div style={S.bookingList}>
-              {myMonthIncome.byStudent.map((s) => (
-                <div key={s.name} style={S.bookingItem}>
-                  <div style={{ ...S.dot, background: liveUser.color }} />
-                  <div style={{ flex: 1 }}><div style={S.bookingCoach}>{s.name}</div></div>
-                  <div style={S.revenueNum}>${s.amount.toLocaleString()}</div>
-                </div>
-              ))}
+              {roster.map((name) => {
+                const log = myIncomeReport.studentLog[name] || [];
+                const open = studentLogOpen === name;
+                return (
+                  <div key={name}>
+                    <div style={{ ...S.coachStatRow, cursor: "pointer" }} onClick={() => setStudentLogOpen(open ? null : name)}>
+                      <div style={{ ...S.avatar, background: liveUser.color }}>{name.slice(0, 2)}</div>
+                      <div style={{ flex: 1 }}><div style={S.bookingCoach}>{name}</div><div style={S.bookingTime}>共 {log.length} 堂</div></div>
+                    </div>
+                    {open && (
+                      <div style={S.purchaseBreakdown}>
+                        {log.length === 0 ? <p style={S.emptyText}>暫無紀錄</p> : log.map((l, i) => (
+                          <div key={i} style={S.purchaseRow}>
+                            <div style={S.bookingTime}>{l.date} · {l.start}–{addMinutes(l.start, l.hours * 60)}</div>
+                            <span style={l.type === "duo" ? S.duoTag : S.soloTag}>{l.type === "duo" ? "1對2" : "1對1"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {view === "pw" && (
         <div style={S.container}>
@@ -1429,9 +1609,28 @@ export default function App() {
               <button style={bookModal.hours === 1 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1 })}>1 小時</button>
               <button style={bookModal.hours === 1.5 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1.5 })}>1.5 小時</button>
             </div>
-            <label style={{ ...S.label, marginTop: 14 }}>學生名（最多4位，用逗號分隔，只有你自己睇到）</label>
-            <input style={S.input} value={bookModal.students || ""} placeholder="例如：Tom, Mary"
-              onChange={(e) => setBookModal({ ...bookModal, students: e.target.value })} />
+            <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位，只有你自己睇到）</label>
+            {(liveUser.studentRoster || []).length === 0 ? (
+              <p style={S.assistHint}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
+            ) : (
+              <div style={S.studentChipWrap}>
+                {(liveUser.studentRoster || []).map((name) => {
+                  const sel = Array.isArray(bookModal.students) && bookModal.students.includes(name);
+                  const atMax = !sel && (bookModal.students || []).length >= 4;
+                  return (
+                    <button key={name} disabled={atMax} style={sel ? S.studentChipActive : atMax ? S.studentChipDisabled : S.studentChip}
+                      onClick={() => {
+                        const cur = bookModal.students || [];
+                        setBookModal({ ...bookModal, students: sel ? cur.filter((n) => n !== name) : [...cur, name] });
+                      }}>{name}</button>
+                  );
+                })}
+              </div>
+            )}
+            {(bookModal.students || []).length < 4 && (
+              <input style={{ ...S.input, marginTop: 8 }} value={bookModal.studentOther || ""} placeholder="其他（唔在名單，打名就得）"
+                onChange={(e) => setBookModal({ ...bookModal, studentOther: e.target.value })} />
+            )}
             <div style={S.priceBox}>
               <div style={S.priceRow}><span>時段</span><span>{bookModal.time} – {addMinutes(bookModal.time, bookModal.hours * 60)}</span></div>
               <div style={S.priceRow}><span>扣堂數</span><span>{bookModal.hours} 堂</span></div>
@@ -1454,6 +1653,11 @@ export default function App() {
             <button style={S.modalConfirm} onClick={() => doCancel(cancelModal.date, cancelModal.start, cancelModal.coachId, cancelModal.type)}>確認取消</button>
           </div>
         </div></div>
+      )}
+      {signModal && (
+        <SignaturePad studentName={signModal.studentName}
+          onCancel={() => setSignModal(null)}
+          onSave={(dataUrl) => { signIn(signModal.date, signModal.start, signModal.coachId, signModal.type, signModal.studentName, dataUrl); setSignModal(null); }} />
       )}
       {toast && <Toast toast={toast} />}
     </div>
@@ -1489,6 +1693,71 @@ function EditCoachModal({ coach, onClose, onSave }) {
 }
 
 function Field({ label, children }) { return <div style={S.inputGroup}><label style={S.label}>{label}</label>{children}</div>; }
+
+// 簽名板：支援滑鼠同觸控（手機）畫簽名，輸出 base64 PNG
+function SignaturePad({ studentName, onSave, onCancel }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+  const hasDrawnRef = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+
+  const getCtx = () => canvasRef.current?.getContext("2d");
+
+  const posFromEvent = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const point = e.touches ? e.touches[0] : e;
+    return { x: point.clientX - rect.left, y: point.clientY - rect.top };
+  };
+
+  const start = (e) => {
+    e.preventDefault();
+    drawingRef.current = true;
+    hasDrawnRef.current = true;
+    lastPos.current = posFromEvent(e);
+  };
+  const move = (e) => {
+    if (!drawingRef.current) return;
+    e.preventDefault();
+    const ctx = getCtx();
+    const pos = posFromEvent(e);
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 2.5; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(lastPos.current.x, lastPos.current.y); ctx.lineTo(pos.x, pos.y); ctx.stroke();
+    lastPos.current = pos;
+  };
+  const end = () => { drawingRef.current = false; };
+
+  const clear = () => {
+    const canvas = canvasRef.current;
+    const ctx = getCtx();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    hasDrawnRef.current = false;
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    canvas.width = canvas.offsetWidth * 2; canvas.height = canvas.offsetHeight * 2;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(2, 2);
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.offsetWidth, canvas.offsetHeight);
+  }, []);
+
+  return (
+    <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320 }}>
+      <h3 style={S.modalTitle}>學生簽到</h3>
+      <p style={S.modalText}>{studentName}　請喺下面簽名作實</p>
+      <canvas ref={canvasRef} style={S.signCanvas}
+        onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+        onTouchStart={start} onTouchMove={move} onTouchEnd={end} />
+      <div style={S.modalBtns}>
+        <button style={S.modalCancel} onClick={clear}>清除</button>
+        <button style={S.modalCancel} onClick={onCancel}>返回</button>
+        <button style={S.modalConfirm} onClick={() => { if (!hasDrawnRef.current) return; onSave(canvasRef.current.toDataURL("image/png")); }}>確認簽到</button>
+      </div>
+    </div></div>
+  );
+}
 function Header({ title, onLogout, syncState }) {
   const sync = {
     synced: { t: "☁️ 已同步", c: "#6BCB77" },
@@ -1541,6 +1810,7 @@ const S = {
   td: { padding: "1px", borderLeft: "1px solid #161616" },
   slotMulti: { display: "flex", gap: 1, minHeight: 30 },
   slotChip: { flex: 1, borderRadius: 3, padding: "2px 3px", display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 30, minWidth: 0 },
+  slotChipMerged: { borderRadius: 3, display: "flex", flexDirection: "column", justifyContent: "space-between", position: "relative", height: "100%", minHeight: 30, padding: "4px 6px", boxSizing: "border-box" },
   slotName: { fontSize: 10, fontWeight: 700, color: "#fff" },
   slotNameFull: { fontSize: 9, fontWeight: 700, color: "#fff", lineHeight: 1.1, wordBreak: "break-word", overflow: "hidden" },
   slotLabelBlock: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0, overflow: "hidden" },
@@ -1549,9 +1819,11 @@ const S = {
   slotStudentsFull: { fontSize: 8, color: "#FFE66D", fontWeight: 700, lineHeight: 1.1, wordBreak: "break-word", overflow: "hidden" },
   slotBottomTime: { fontSize: 8, color: "#ffffffaa", lineHeight: 1.1, marginTop: "auto", whiteSpace: "nowrap", overflow: "hidden" },
   cancelSlotBtn: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 10, padding: 0 },
+  cancelSlotBtnAbs: { position: "absolute", top: 2, right: 2, background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 10, padding: 0, zIndex: 1 },
   slotEmpty: { width: "100%", minHeight: 20, background: "#1a1a1a", border: "none", borderRadius: 3, color: "#3a3a3a", fontSize: 13, cursor: "pointer" },
   slotEmptyRO: { minHeight: 20, background: "#1a1a1a", borderRadius: 3 },
   slotAdd: { width: 18, minHeight: 30, background: "#202020", border: "1px dashed #3a3a3a", borderRadius: 3, color: "#6BCB77", fontSize: 12, cursor: "pointer", flexShrink: 0 },
+  slotAdd2: { width: "100%", minHeight: 26, background: "#202020", border: "1px dashed #3a3a3a", borderRadius: 3, color: "#6BCB77", fontSize: 12, cursor: "pointer" },
   slotPast: { minHeight: 20, background: "#111", borderRadius: 3 },
   slotDisabled: { minHeight: 20, background: "#141414", borderRadius: 3 },
   slotClosed: { minHeight: 20, background: "#0c0c0c", borderRadius: 3 },
@@ -1608,6 +1880,12 @@ const S = {
   amountPreview: { color: "#6BCB77", fontSize: 13, fontWeight: 600, margin: "4px 0 12px" },
   segRow: { display: "flex", gap: 8 },
   checkRow: { display: "flex", gap: 16, marginBottom: 16 },
+  studentChipWrap: { display: "flex", gap: 6, flexWrap: "wrap" },
+  studentChip: { background: "#2a2a2a", border: "1px solid #333", color: "#ccc", borderRadius: 16, padding: "6px 12px", fontSize: 12, cursor: "pointer" },
+  studentChipActive: { background: "#4ECDC4", border: "1px solid #4ECDC4", color: "#000", borderRadius: 16, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 700 },
+  studentChipDisabled: { background: "#1a1a1a", border: "1px solid #222", color: "#444", borderRadius: 16, padding: "6px 12px", fontSize: 12, cursor: "not-allowed" },
+  rosterChip: { display: "inline-flex", alignItems: "center", gap: 6, background: "#2a2a2a", border: "1px solid #333", color: "#ccc", borderRadius: 16, padding: "6px 8px 6px 12px", fontSize: 12 },
+  rosterRemoveBtn: { background: "transparent", border: "none", color: "#FF8FA3", cursor: "pointer", fontSize: 12, padding: "0 2px" },
   checkLabel: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#ccc", cursor: "pointer" },
   seg: { flex: 1, background: "#2a2a2a", border: "1px solid #333", color: "#aaa", borderRadius: 10, padding: "10px", cursor: "pointer", fontSize: 14 },
   segActive: { flex: 1, background: "#4ECDC4", border: "1px solid #4ECDC4", color: "#000", borderRadius: 10, padding: "10px", cursor: "pointer", fontSize: 14, fontWeight: 700 },
@@ -1615,6 +1893,10 @@ const S = {
   priceBox: { background: "#222", borderRadius: 10, padding: "12px 14px", margin: "16px 0" },
   priceRow: { display: "flex", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "3px 0" },
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 },
+  signCanvas: { width: "100%", height: 160, background: "#fff", borderRadius: 10, touchAction: "none", display: "block" },
+  signRow: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 },
+  signChip: { background: "#2a2a2a", border: "1px solid #333", color: "#FFB347", borderRadius: 12, padding: "4px 10px", fontSize: 11, cursor: "pointer" },
+  signedChip: { background: "#13302e", border: "1px solid #1d3a2a", color: "#6BCB77", borderRadius: 12, padding: "4px 10px", fontSize: 11, cursor: "default" },
   modal: { background: "#1a1a1a", borderRadius: 16, padding: "28px 24px", width: 320, textAlign: "center", maxHeight: "85vh", overflowY: "auto" },
   modalTitle: { fontSize: 18, fontWeight: 700, marginBottom: 12 },
   modalText: { color: "#aaa", marginBottom: 20, lineHeight: 1.6 },
