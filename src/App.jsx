@@ -202,6 +202,7 @@ export default function App() {
   const [viewMonth, setViewMonth] = useState(() => monthKey(formatDate(new Date())));
   const [monthsExpanded, setMonthsExpanded] = useState(false);
   const [newStudentName, setNewStudentName] = useState("");
+  const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
   const [studentLogOpen, setStudentLogOpen] = useState(null);
   const [resetModal, setResetModal] = useState(false);
   const [delCoachModal, setDelCoachModal] = useState(null); // coach pending deletion
@@ -272,11 +273,15 @@ export default function App() {
     const err = canPlace(date, time, hours);
     if (err) { showToast(err, "error"); return; }
     const price = sessionType === "duo" ? duoPrice(hours) : liveUser.rate * hours;
+    const rentalCost = liveUser.rate * hours; // 租場費用：用「落單嗰刻」嘅租金snapshot，日後改租金唔會影響舊紀錄
     const slots = slotsFor(time, hours);
     const selected = Array.isArray(bookModal.students) ? bookModal.students : [];
     const extra = (bookModal.studentOther || "").trim();
     const studentList = [...selected, ...(extra ? [extra] : [])].filter(Boolean).slice(0, 4);
-    const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, students: studentList, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    // 將每位學生「當時」嘅收費 snapshot 落呢張記錄（roster 有嘅用 roster 收費；自填嘅新名暫定 $0，教練可以之後再幫佈設收費）
+    const studentCharges = {};
+    studentList.forEach((n) => { const s = myRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
+    const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
       slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -370,7 +375,20 @@ export default function App() {
       });
       return u;
     });
-    showToast(`${studentName} 已簽到`);
+    // 簽到先確實上堂 → 先扣呢個學生嘅堂數（取消咗嘅堂冇人簽，自然唔會扣錯）
+    let remainText = "";
+    setCoaches((prev) => prev.map((c) => {
+      if (c.id !== coachId) return c;
+      const roster = (c.studentRoster || []).map(normStudent);
+      const idx = roster.findIndex((s) => s.name === studentName);
+      if (idx === -1) return c;
+      const updated = { ...roster[idx], used: (roster[idx].used || 0) + meta.hours };
+      const remain = (updated.credits || 0) - updated.used;
+      if (remain <= LOW_CREDIT_THRESHOLD) remainText = `　⚠️ 剩返 ${Math.max(0, remain)} 堂`;
+      const newRoster = [...roster]; newRoster[idx] = updated;
+      return { ...c, studentRoster: newRoster };
+    }));
+    showToast(`${studentName} 已簽到${remainText}`);
   };
 
   // 教練本月已用 / 剩餘代取消額度
@@ -379,15 +397,39 @@ export default function App() {
     return assistCancelLog.filter((r) => r.coachId === coachId && r.month === m).length;
   };
 
+  // 學生名單由舊版「淨係名」升級做完整 record；呢個 helper 兩種格式都食得（向後兼容舊資料）
+  const normStudent = (s) => (typeof s === "string" ? { name: s, rate: 0, credits: 0, used: 0 } : { rate: 0, credits: 0, used: 0, ...s });
+  const myRoster = (liveUser?.studentRoster || []).map(normStudent);
+  const getStudentRoster = (coachId) => (getCoach(coachId)?.studentRoster || []).map(normStudent);
+
   // 教練新增學生入自己嘅名單（去重、淨係自己改到自己嗰份）
   const addStudentToRoster = () => {
     const name = newStudentName.trim();
     if (!name) return;
     if (!isCoach) return;
-    const cur = liveUser.studentRoster || [];
-    if (cur.includes(name)) { showToast("呢個名已經喺名單度", "error"); return; }
-    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: [...(c.studentRoster || []), name] } : c));
+    if (myRoster.some((s) => s.name === name)) { showToast("呢個名已經喺名單度", "error"); return; }
+    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: [...myRoster, { name, rate: 0, credits: 0, used: 0 }] } : c));
     setNewStudentName("");
+  };
+
+  const updateStudentField = (name, field, value) => {
+    setCoaches((prev) => prev.map((c) => {
+      if (c.id !== currentUser.id) return c;
+      const roster = (c.studentRoster || []).map(normStudent);
+      return { ...c, studentRoster: roster.map((s) => s.name === name ? { ...s, [field]: value } : s) };
+    }));
+  };
+
+  const removeStudent = (name) => {
+    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: myRoster.filter((s) => s.name !== name) } : c));
+  };
+
+  // 幫學生開堂數（教練自己用，類似 admin 幫教練「+ 堂」嗰個概念）
+  const addStudentCredits = (name, qty) => {
+    const s = myRoster.find((x) => x.name === name);
+    if (!s) return;
+    updateStudentField(name, "credits", (s.credits || 0) + qty);
+    showToast(`已為 ${name} 增加 ${qty} 堂`);
   };
 
   const changePassword = () => {
@@ -534,28 +576,27 @@ export default function App() {
     const date = k.split("_")[0];
     arr.forEach((v) => {
       if (v.coachId === currentUser?.id && k === `${date}_${v.start}`)
-        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, price: v.price || 0, students: v.students || [], signatures: v.signatures || {} });
+        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, price: v.price || 0, rentalCost: v.rentalCost ?? (v.price || 0), students: v.students || [], studentCharges: v.studentCharges || {}, signatures: v.signatures || {} });
     });
   });
   myBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
 
-  // 教練近3個月實際收入（扣除租場費用）+ 各學生上堂紀錄
+  // 教練近3個月實際收入（只計有填學生名嘅堂，用 snapshot 收費；扣除租場費用）+ 各學生上堂紀錄（近3個月）
   const myIncomeReport = (() => {
     if (!isCoach) return { months: [], studentLog: {} };
     const now = new Date();
-    const months = [0, 1, 2].map((i) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const tm = monthKey(formatDate(d));
-      const bs = myBookings.filter((b) => monthKey(b.date) === tm);
-      const gross = bs.reduce((s, b) => s + (b.price || 0), 0);
-      const rentalCost = bs.reduce((s, b) => s + (liveUser.rate || 0) * b.hours, 0);
+    const cutoffs = [0, 1, 2].map((i) => monthKey(formatDate(new Date(now.getFullYear(), now.getMonth() - i, 1))));
+    const months = cutoffs.map((tm) => {
+      const bs = myBookings.filter((b) => monthKey(b.date) === tm && b.students.length > 0);
+      const gross = bs.reduce((s, b) => s + Object.values(b.studentCharges || {}).reduce((a, v) => a + v, 0), 0);
+      const rentalCost = bs.reduce((s, b) => s + (b.rentalCost || 0), 0);
       return { month: tm, gross, rentalCost, net: gross - rentalCost, count: bs.length };
     });
     const studentLog = {};
-    myBookings.forEach((b) => {
+    myBookings.filter((b) => cutoffs.includes(monthKey(b.date))).forEach((b) => {
       (b.students || []).forEach((n) => {
         if (!studentLog[n]) studentLog[n] = [];
-        studentLog[n].push({ date: b.date, start: b.start, hours: b.hours, type: b.type });
+        studentLog[n].push({ date: b.date, start: b.start, hours: b.hours, type: b.type, charge: (b.studentCharges || {})[n] || 0 });
       });
     });
     Object.values(studentLog).forEach((arr) => arr.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`)));
@@ -1440,17 +1481,17 @@ export default function App() {
       )}
 
       {view === "income" && (() => {
-        const roster = liveUser.studentRoster || [];
+        const roster = myRoster;
         return (
         <div style={S.container}>
           <h2 style={S.sectionTitle}>我的收入（近3個月）</h2>
-          <p style={S.assistHint}>實際收入＝收費 － 租場費用（每堂租金 × 時長）。一對一通常為 $0（收費等於租場費用）；一對二／多人堂多收嘅部分先計入收入。</p>
+          <p style={S.assistHint}>只計有填學生名嘅堂（用學生當時收費計）；冇填學生名嘅堂唔計入呢個收入。實際收入＝學生收費總額 － 租場費用（落單嗰刻嘅租金 × 時長）。</p>
           <div style={S.bookingList}>
             {myIncomeReport.months.map((m) => (
               <div key={m.month} style={S.monthCard}>
                 <div style={S.monthHead}>{m.month}{m.month === monthKey(formatDate(new Date())) ? "（本月）" : ""}</div>
-                <div style={S.monthRow}><span style={S.monthLabel}>堂數</span><span>{m.count} 堂</span></div>
-                <div style={S.monthRow}><span style={S.monthLabel}>總收費</span><span>${m.gross.toLocaleString()}</span></div>
+                <div style={S.monthRow}><span style={S.monthLabel}>計入收入嘅堂數</span><span>{m.count} 堂</span></div>
+                <div style={S.monthRow}><span style={S.monthLabel}>學生收費總額</span><span>${m.gross.toLocaleString()}</span></div>
                 <div style={S.monthRow}><span style={S.monthLabel}>租場費用</span><span style={{ color: "#FF8FA3" }}>-${m.rentalCost.toLocaleString()}</span></div>
                 <div style={S.monthRow}><span style={{ ...S.monthLabel, fontWeight: 700, color: "#fff" }}>實際收入</span><span style={{ color: m.net >= 0 ? "#6BCB77" : "#FF6B6B", fontWeight: 700 }}>${m.net.toLocaleString()}</span></div>
               </div>
@@ -1458,15 +1499,25 @@ export default function App() {
           </div>
 
           <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生名單</h2>
-          <p style={S.assistHint}>呢度新增嘅學生名，預約場地時可以直接喺名單度揀，唔使逐次打字。</p>
-          <div style={S.studentChipWrap}>
-            {roster.map((name) => (
-              <span key={name} style={S.rosterChip}>
-                {name}
-                <button style={S.rosterRemoveBtn} onClick={() => setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: (c.studentRoster || []).filter((n) => n !== name) } : c))}>✕</button>
-              </span>
-            ))}
-            {roster.length === 0 && <p style={S.emptyText}>仲未有學生，落面新增啦</p>}
+          <p style={S.assistHint}>呢度新增嘅學生，預約場地時可以直接揀；收費同堂數會用嚎計收入同提醒續堂。</p>
+          {roster.length === 0 && <p style={S.emptyText}>仲未有學生，落面新增啦</p>}
+          <div style={S.bookingList}>
+            {roster.map((s) => {
+              const remain = (s.credits || 0) - (s.used || 0);
+              const low = remain <= LOW_CREDIT_THRESHOLD;
+              return (
+                <div key={s.name} style={S.formCard}>
+                  <div style={{ ...S.flexBetween, marginBottom: 10 }}>
+                    <div style={S.bookingCoach}>{s.name}{low && <span style={S.lowPill}>低</span>}</div>
+                    <button style={S.rosterRemoveBtn} onClick={() => removeStudent(s.name)}>刪除</button>
+                  </div>
+                  <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0" value={s.rate}
+                    onChange={(e) => updateStudentField(s.name, "rate", parseInt(e.target.value) || 0)} /></Field>
+                  <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂　剩 <span style={{ color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}>{remain}</span> 堂</div>
+                  <button style={{ ...S.creditBtn, marginTop: 8 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1 })}>+ 幫佈開堂數</button>
+                </div>
+              );
+            })}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <input style={S.input} value={newStudentName} placeholder="新學生名" onChange={(e) => setNewStudentName(e.target.value)}
@@ -1474,24 +1525,28 @@ export default function App() {
             <button style={{ ...S.creditBtn, whiteSpace: "nowrap" }} onClick={addStudentToRoster}>新增</button>
           </div>
 
-          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生上課紀錄</h2>
-          {roster.length === 0 ? <p style={S.emptyText}>新增學生後，呢度會顯示佢哋嘅上堂紀錄</p> : (
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生上課紀錄（近3個月）</h2>
+          {roster.length === 0 ? <p style={S.emptyText}>新增學生後，呢度會顯示佈哋嘅上堂紀錄</p> : (
             <div style={S.bookingList}>
-              {roster.map((name) => {
+              {roster.map((s) => {
+                const name = s.name;
                 const log = myIncomeReport.studentLog[name] || [];
                 const open = studentLogOpen === name;
                 return (
                   <div key={name}>
                     <div style={{ ...S.coachStatRow, cursor: "pointer" }} onClick={() => setStudentLogOpen(open ? null : name)}>
                       <div style={{ ...S.avatar, background: liveUser.color }}>{name.slice(0, 2)}</div>
-                      <div style={{ flex: 1 }}><div style={S.bookingCoach}>{name}</div><div style={S.bookingTime}>共 {log.length} 堂</div></div>
+                      <div style={{ flex: 1 }}><div style={S.bookingCoach}>{name}</div><div style={S.bookingTime}>近3個月共 {log.length} 堂</div></div>
                     </div>
                     {open && (
                       <div style={S.purchaseBreakdown}>
                         {log.length === 0 ? <p style={S.emptyText}>暫無紀錄</p> : log.map((l, i) => (
                           <div key={i} style={S.purchaseRow}>
                             <div style={S.bookingTime}>{l.date} · {l.start}–{addMinutes(l.start, l.hours * 60)}</div>
-                            <span style={l.type === "duo" ? S.duoTag : S.soloTag}>{l.type === "duo" ? "1對2" : "1對1"}</span>
+                            <div style={{ textAlign: "right" }}>
+                              <span style={l.type === "duo" ? S.duoTag : S.soloTag}>{l.type === "duo" ? "1對2" : "1對1"}</span>
+                              <div style={{ fontSize: 12, color: "#4ECDC4", marginTop: 2 }}>${l.charge}</div>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1537,11 +1592,11 @@ export default function App() {
               <button style={bookModal.hours === 1.5 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1.5 })}>1.5 小時</button>
             </div>
             <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位，只有你自己睇到）</label>
-            {(liveUser.studentRoster || []).length === 0 ? (
+            {myRoster.length === 0 ? (
               <p style={S.assistHint}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
             ) : (
               <div style={S.studentChipWrap}>
-                {(liveUser.studentRoster || []).map((name) => {
+                {myRoster.map(({ name }) => {
                   const sel = Array.isArray(bookModal.students) && bookModal.students.includes(name);
                   const atMax = !sel && (bookModal.students || []).length >= 4;
                   return (
@@ -1585,6 +1640,18 @@ export default function App() {
         <SignaturePad studentName={signModal.studentName}
           onCancel={() => setSignModal(null)}
           onSave={(dataUrl) => { signIn(signModal.date, signModal.start, signModal.coachId, signModal.type, signModal.studentName, dataUrl); setSignModal(null); }} />
+      )}
+      {addStudentCreditModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>幫學生開堂數</h3>
+          <p style={S.modalText}>{addStudentCreditModal.name}</p>
+          <Field label="增加幾多堂"><input style={S.input} type="number" min="1" value={addStudentCreditModal.qty}
+            onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, qty: parseInt(e.target.value) || 1 })} /></Field>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setAddStudentCreditModal(null)}>取消</button>
+            <button style={S.modalConfirm} onClick={() => { addStudentCredits(addStudentCreditModal.name, addStudentCreditModal.qty); setAddStudentCreditModal(null); }}>確認增加</button>
+          </div>
+        </div></div>
       )}
       {toast && <Toast toast={toast} />}
     </div>
