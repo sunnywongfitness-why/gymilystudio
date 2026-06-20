@@ -376,18 +376,24 @@ export default function App() {
       return u;
     });
     // 簽到先確實上堂 → 先扣呢個學生嘅堂數（取消咗嘅堂冇人簽，自然唔會扣錯）
+    // 注意：唔可以靠 setCoaches 嘅 updater 嚎計提醒文字，因為 updater 唔保證即刻執行（React 會 batch），
+    // 跟住嗰行 showToast 好多時讀到嘅仲係舊值。所以要喺呼叫 setCoaches 之前，用現有資料直接計好。
+    const roster = getStudentRoster(coachId);
+    const sIdx = roster.findIndex((s) => s.name === studentName);
     let remainText = "";
-    setCoaches((prev) => prev.map((c) => {
-      if (c.id !== coachId) return c;
-      const roster = (c.studentRoster || []).map(normStudent);
-      const idx = roster.findIndex((s) => s.name === studentName);
-      if (idx === -1) return c;
-      const updated = { ...roster[idx], used: (roster[idx].used || 0) + meta.hours };
-      const remain = (updated.credits || 0) - updated.used;
+    if (sIdx !== -1) {
+      const newUsed = (roster[sIdx].used || 0) + meta.hours;
+      const remain = (roster[sIdx].credits || 0) - newUsed;
       if (remain <= LOW_CREDIT_THRESHOLD) remainText = `　⚠️ 剩返 ${Math.max(0, remain)} 堂`;
-      const newRoster = [...roster]; newRoster[idx] = updated;
-      return { ...c, studentRoster: newRoster };
-    }));
+      setCoaches((prev) => prev.map((c) => {
+        if (c.id !== coachId) return c;
+        const r = (c.studentRoster || []).map(normStudent);
+        const i = r.findIndex((s) => s.name === studentName);
+        if (i === -1) return c;
+        const newRoster = [...r]; newRoster[i] = { ...r[i], used: newUsed };
+        return { ...c, studentRoster: newRoster };
+      }));
+    }
     showToast(`${studentName} 已簽到${remainText}`);
   };
 
