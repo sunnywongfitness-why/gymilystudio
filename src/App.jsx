@@ -1514,27 +1514,54 @@ export default function App() {
           </div>
 
           <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生名單</h2>
-          <p style={S.assistHint}>呢度新增嘅學生，預約場地時可以直接揀；收費同堂數會用嚎計收入同提醒續堂。</p>
+          <p style={S.assistHint}>撳學生名展開資料同上課紀錄。預約場地時可以直接揀名單入面嘅學生。</p>
           {roster.length === 0 && <p style={S.emptyText}>仲未有學生，落面新增啦</p>}
           <div style={S.bookingList}>
             {roster.map((s) => {
               const remain = (s.credits || 0) - (s.used || 0);
               const low = remain <= LOW_CREDIT_THRESHOLD;
+              const open = studentLogOpen === s.name;
+              const log = myIncomeReport.studentLog[s.name] || [];
               return (
-                <div key={s.name} style={S.formCard}>
-                  <div style={{ ...S.flexBetween, marginBottom: 10 }}>
-                    <div style={S.bookingCoach}>{s.name}{low && <span style={S.lowPill}>低</span>}</div>
-                    <button style={S.rosterRemoveBtn} onClick={() => removeStudent(s.name)}>刪除</button>
+                <div key={s.name}>
+                  <div style={{ ...S.coachStatRow, cursor: "pointer" }} onClick={() => setStudentLogOpen(open ? null : s.name)}>
+                    <div style={{ ...S.avatar, background: liveUser.color }}>{s.name.slice(0, 2)}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={S.bookingCoach}>{s.name}{low && <span style={S.lowPill}>低</span>}</div>
+                      <div style={S.bookingTime}>每堂 ${s.rate || 0}　近3個月 {log.length} 堂</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}>剩 {remain} 堂</div>
+                    </div>
                   </div>
-                  <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0" value={s.rate}
-                    onChange={(e) => updateStudentField(s.name, "rate", parseInt(e.target.value) || 0)} /></Field>
-                  <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂</div>
-                  <Field label="剩餘堂數">
-                    <input style={{ ...S.input, borderColor: low ? "#5a2020" : undefined, color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}
-                      type="number" value={remain}
-                      onChange={(e) => setStudentRemain(s.name, parseInt(e.target.value) || 0)} />
-                  </Field>
-                  <button style={{ ...S.creditBtn, marginTop: 8 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1 })}>+ 幫佈開堂數</button>
+                  {open && (
+                    <div style={S.purchaseBreakdown}>
+                      <div style={{ ...S.flexBetween, marginBottom: 4 }}>
+                        <span style={S.assistHint}>學生資料</span>
+                        <button style={S.rosterRemoveBtn} onClick={() => removeStudent(s.name)}>刪除學生</button>
+                      </div>
+                      <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0" value={s.rate}
+                        onChange={(e) => updateStudentField(s.name, "rate", parseInt(e.target.value) || 0)} /></Field>
+                      <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂</div>
+                      <Field label="剩餘堂數">
+                        <input style={{ ...S.input, borderColor: low ? "#5a2020" : undefined, color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}
+                          type="number" value={remain}
+                          onChange={(e) => setStudentRemain(s.name, parseInt(e.target.value) || 0)} />
+                      </Field>
+                      <button style={{ ...S.creditBtn, marginTop: 4, marginBottom: 14 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1 })}>+ 幫佈開堂數</button>
+
+                      <div style={{ ...S.assistHint, marginBottom: 4 }}>上課紀錄（近3個月）</div>
+                      {log.length === 0 ? <p style={S.emptyText}>暫無紀錄</p> : log.map((l, i) => (
+                        <div key={i} style={S.purchaseRow}>
+                          <div style={S.bookingTime}>{l.date} · {l.start}–{addMinutes(l.start, l.hours * 60)}</div>
+                          <div style={{ textAlign: "right" }}>
+                            <span style={l.type === "duo" ? S.duoTag : S.soloTag}>{l.type === "duo" ? "1對2" : "1對1"}</span>
+                            <div style={{ fontSize: 12, color: "#4ECDC4", marginTop: 2 }}>${l.charge}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1544,38 +1571,6 @@ export default function App() {
               onKeyDown={(e) => e.key === "Enter" && addStudentToRoster()} />
             <button style={{ ...S.creditBtn, whiteSpace: "nowrap" }} onClick={addStudentToRoster}>新增</button>
           </div>
-
-          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生上課紀錄（近3個月）</h2>
-          {roster.length === 0 ? <p style={S.emptyText}>新增學生後，呢度會顯示佈哋嘅上堂紀錄</p> : (
-            <div style={S.bookingList}>
-              {roster.map((s) => {
-                const name = s.name;
-                const log = myIncomeReport.studentLog[name] || [];
-                const open = studentLogOpen === name;
-                return (
-                  <div key={name}>
-                    <div style={{ ...S.coachStatRow, cursor: "pointer" }} onClick={() => setStudentLogOpen(open ? null : name)}>
-                      <div style={{ ...S.avatar, background: liveUser.color }}>{name.slice(0, 2)}</div>
-                      <div style={{ flex: 1 }}><div style={S.bookingCoach}>{name}</div><div style={S.bookingTime}>近3個月共 {log.length} 堂</div></div>
-                    </div>
-                    {open && (
-                      <div style={S.purchaseBreakdown}>
-                        {log.length === 0 ? <p style={S.emptyText}>暫無紀錄</p> : log.map((l, i) => (
-                          <div key={i} style={S.purchaseRow}>
-                            <div style={S.bookingTime}>{l.date} · {l.start}–{addMinutes(l.start, l.hours * 60)}</div>
-                            <div style={{ textAlign: "right" }}>
-                              <span style={l.type === "duo" ? S.duoTag : S.soloTag}>{l.type === "duo" ? "1對2" : "1對1"}</span>
-                              <div style={{ fontSize: 12, color: "#4ECDC4", marginTop: 2 }}>${l.charge}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
         );
       })()}
