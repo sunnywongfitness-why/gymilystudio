@@ -438,6 +438,15 @@ export default function App() {
     showToast(`已為 ${name} 增加 ${qty} 堂`);
   };
 
+  // 直接修改「剩餘堂數」：保留「已用」（簽到歷史唔變），改返「已開」嚎夾返新嘅剩餘數
+  const setStudentRemain = (name, newRemain) => {
+    const s = myRoster.find((x) => x.name === name);
+    if (!s) return;
+    const used = s.used || 0;
+    const newCredits = Math.max(0, used + newRemain);
+    updateStudentField(name, "credits", newCredits);
+  };
+
   const changePassword = () => {
     if (pwForm.new1 !== pwForm.new2) return showToast("兩次新密碼唔一致", "error");
     if (pwForm.new1.length < 4) return showToast("密碼至少4位", "error");
@@ -1519,7 +1528,12 @@ export default function App() {
                   </div>
                   <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0" value={s.rate}
                     onChange={(e) => updateStudentField(s.name, "rate", parseInt(e.target.value) || 0)} /></Field>
-                  <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂　剩 <span style={{ color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}>{remain}</span> 堂</div>
+                  <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂</div>
+                  <Field label="剩餘堂數">
+                    <input style={{ ...S.input, borderColor: low ? "#5a2020" : undefined, color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}
+                      type="number" value={remain}
+                      onChange={(e) => setStudentRemain(s.name, parseInt(e.target.value) || 0)} />
+                  </Field>
                   <button style={{ ...S.creditBtn, marginTop: 8 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1 })}>+ 幫佈開堂數</button>
                 </div>
               );
