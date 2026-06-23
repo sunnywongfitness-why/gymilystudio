@@ -10,6 +10,12 @@ const loadStore = () => {
 const initStore = loadStore();
 const persisted = (key, fallback) => (initStore[key] !== undefined ? initStore[key] : fallback);
 
+// ---- 登入狀態（記住密碼）：獨立一個 key，淨係存喺呢部裝置，唔會同其他資料一齊上雲端同步 ----
+const SESSION_KEY = "gymily_session_v1";
+const loadSession = () => { try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; } };
+const saveSession = (s) => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } };
+const clearSession = () => { try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ } };
+
 // 穩定序列化：將物件 key 依字母排序，令同步比對唔受 Supabase jsonb 重排 key 影響
 function stableStringify(obj) {
   if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
@@ -21,6 +27,33 @@ function stableStringify(obj) {
 const LOGO = "data:image/png;base64,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";
 
 const DEFAULT_COACHES = [];
+const DEFAULT_SUBADMINS = [
+  { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+  { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+];
+const ADMIN_TAB_KEYS = ["overview", "schedule", "coaches", "ledger", "records", "settings"];
+
+// 解析之前記住嘅登入狀態 —— 喺第一次 render 之前就計好，唔會閃一下 login 畫面先再跳轉
+function resolveSession() {
+  const session = loadSession();
+  if (!session) return null;
+  if (session.role === "admin") return { user: { id: 0, name: "管理員", role: "admin" }, view: "admin", adminTab: "overview" };
+  if (session.role === "subadmin") {
+    const subs = persisted("subAdmins", DEFAULT_SUBADMINS);
+    const sub = subs.find((s) => s.id === session.id);
+    if (!sub) { clearSession(); return null; }
+    const firstAllowed = ADMIN_TAB_KEYS.find((k) => sub.permissions?.[k]);
+    return { user: { ...sub, role: "subadmin" }, view: "admin", adminTab: firstAllowed || "settings" };
+  }
+  if (session.role === "coach") {
+    const coaches = persisted("coaches", DEFAULT_COACHES);
+    const coach = coaches.find((c) => c.id === session.id);
+    if (!coach) { clearSession(); return null; }
+    return { user: { ...coach, role: "coach" }, view: "calendar", adminTab: "overview" };
+  }
+  return null;
+}
+const initialSession = resolveSession();
 
 
 const COLORS = ["#FF6B6B", "#4ECDC4", "#FFE66D", "#A8E6CF", "#C9B1FF", "#FFB347", "#FF8FA3", "#6BCB77"];
@@ -95,13 +128,10 @@ function buildEntryLines(v, isTrial, coachObj, isOwner) {
 
 export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => initialSession?.user || null);
   const [adminPassword, setAdminPassword] = useState(() => persisted("adminPassword", "admin123"));
-  const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", [
-    { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
-    { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
-  ]));
-  const [view, setView] = useState("login");
+  const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
+  const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
   const [bookings, setBookings] = useState(() => persisted("bookings", {}));
   const [purchaseLog, setPurchaseLog] = useState(() => persisted("purchaseLog", []));
@@ -190,7 +220,7 @@ export default function App() {
   const [pwForm, setPwForm] = useState({ old: "", new1: "", new2: "" });
   const [editCoach, setEditCoach] = useState(null);
   const [addCreditModal, setAddCreditModal] = useState(null);
-  const [adminTab, setAdminTab] = useState("overview");
+  const [adminTab, setAdminTab] = useState(() => initialSession?.adminTab || "overview");
   const [recordsView, setRecordsView] = useState("bookings"); // bookings | cancelled
   const [recCoach, setRecCoach] = useState("all");
   const [recType, setRecType] = useState("all"); // all|solo|duo|private|group|trial
@@ -215,7 +245,7 @@ export default function App() {
   const handleLogin = () => {
     const uid = loginForm.id.trim().toLowerCase();
     if (uid === "admin") {
-      if (loginForm.password === adminPassword) { setCurrentUser({ id: 0, name: "管理員", role: "admin" }); setView("admin"); }
+      if (loginForm.password === adminPassword) { setCurrentUser({ id: 0, name: "管理員", role: "admin" }); setView("admin"); saveSession({ role: "admin" }); }
       else showToast("管理員密碼錯誤", "error");
       return;
     }
@@ -225,13 +255,14 @@ export default function App() {
       setView("admin");
       const firstAllowed = ["overview", "schedule", "coaches", "ledger", "records", "settings"].find((k) => sub.permissions?.[k]);
       setAdminTab(firstAllowed || "settings");
+      saveSession({ role: "subadmin", id: sub.id });
       return;
     }
     const coach = coaches.find((c) => (c.username || "").toLowerCase() === uid && c.password === loginForm.password);
-    if (coach) { setCurrentUser({ ...coach, role: "coach" }); setView("calendar"); }
+    if (coach) { setCurrentUser({ ...coach, role: "coach" }); setView("calendar"); saveSession({ role: "coach", id: coach.id }); }
     else showToast("帳號或密碼錯誤", "error");
   };
-  const logout = () => { setCurrentUser(null); setView("login"); setLoginForm({ id: "", password: "" }); };
+  const logout = () => { setCurrentUser(null); setView("login"); setLoginForm({ id: "", password: "" }); clearSession(); };
 
   const isCoach = currentUser?.role === "coach";
   const liveUser = isCoach ? getCoach(currentUser.id) : currentUser;
@@ -660,7 +691,7 @@ export default function App() {
       const date = k.split("_")[0];
       arr.forEach((v) => {
         if (k === `${date}_${v.start}`)
-          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null });
+          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null, students: v.students || [] });
       });
     });
     allBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
@@ -866,7 +897,7 @@ export default function App() {
                                     const c = isTrial ? null : getCoach(v.coachId);
                                     const span = Math.round(v.hours * 4);
                                     const relRow = slotIndex(time) - slotIndex(v.start);
-                                    const lines = buildEntryLines(v, isTrial, c, false);
+                                    const lines = buildEntryLines(v, isTrial, c, true);
                                     let node = null;
                                     if (span === 1) node = <span style={lines[0].style}>{lines[0].text}</span>;
                                     else if (relRow < span - 1 && relRow < lines.length) node = <span style={lines[relRow].style}>{lines[relRow].text}</span>;
@@ -1016,7 +1047,7 @@ export default function App() {
                 <div style={S.recSummary}>共 {list.length} 項　｜　收入 ${sumRevenue.toLocaleString()}</div>
                 <div style={S.bookingList}>
                   {list.length === 0 ? <p style={S.emptyText}>冇符合條件嘅記錄</p> : list.map((b, i) => {
-                    const { date, start, hours, type, charterType, price, coachName, coach, coachId } = b;
+                    const { date, start, hours, type, charterType, price, coachName, coach, coachId, students } = b;
                     const key = `${date}_${start}_${coachId}_${type}`;
                     const open = recExpanded === key;
                     const isPast = new Date(`${date}T${start}:00`) < now;
@@ -1037,6 +1068,7 @@ export default function App() {
                             <div>類型：{type === "charter" ? rentalFull(charterType) : type === "duo" ? "一對二" : "一對一"}</div>
                             <div>收費：{type === "charter" && charterType === "trial" ? "免費" : `$${price}`}</div>
                             {type !== "charter" && <div>扣堂數：{hours} 堂</div>}
+                            {students && students.length > 0 && <div>學生：{students.join("、")}</div>}
                             <div>落單時間：{b.createdAt || "—（舊記錄）"}</div>
                           </div>
                         )}
@@ -1329,10 +1361,7 @@ export default function App() {
               <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
                 try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
                 setCoaches(DEFAULT_COACHES); setAdminPassword("admin123"); setBookings({});
-                setSubAdmins([
-                  { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
-                  { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
-                ]);
+                setSubAdmins(DEFAULT_SUBADMINS);
                 setPurchaseLog([]); setCharterLog([]); setAssistCancelLog([]); setCancelLog([]);
                 setResetModal(false); showToast("已重設資料");
               }}>確認重設</button>
