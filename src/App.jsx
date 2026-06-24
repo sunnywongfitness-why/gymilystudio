@@ -16,6 +16,11 @@ const loadSession = () => { try { return JSON.parse(localStorage.getItem(SESSION
 const saveSession = (s) => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } };
 const clearSession = () => { try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ } };
 
+// ---- 日曆縮放偏好：純粹顯示設定，淨係存喺呢部裝置，唔同步 ----
+const CALSCALE_KEY = "gymily_calscale_v1";
+const loadCalScale = () => { try { const v = parseFloat(localStorage.getItem(CALSCALE_KEY)); return v && v >= 0.5 && v <= 1 ? v : 1; } catch (e) { return 1; } };
+const saveCalScale = (v) => { try { localStorage.setItem(CALSCALE_KEY, String(v)); } catch (e) { /* ignore */ } };
+
 // 穩定序列化：將物件 key 依字母排序，令同步比對唔受 Supabase jsonb 重排 key 影響
 function stableStringify(obj) {
   if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
@@ -139,6 +144,8 @@ export default function App() {
   const [ledgerMonth, setLedgerMonth] = useState("all"); // "all" or "YYYY-MM"
   const [editDateRec, setEditDateRec] = useState(null); // {id, date}
   const [weekOffset, setWeekOffset] = useState(0);
+  const [calScale, setCalScale] = useState(() => loadCalScale());
+  const updateCalScale = (v) => { setCalScale(v); saveCalScale(v); };
   const [bookModal, setBookModal] = useState(null);   // { date, time }
   const [charterModal, setCharterModal] = useState(null); // admin charter { date, time, hours }
   const [charterLog, setCharterLog] = useState(() => persisted("charterLog", [])); // {date, bookDate, start, hours, amount}
@@ -673,7 +680,6 @@ export default function App() {
   if (view === "admin") {
     const totalSold = coaches.reduce((s, c) => s + c.credits, 0);
     const totalUsed = coaches.reduce((s, c) => s + c.used, 0);
-
     // helper: a coach's initial credits not represented in the purchase log
     const initialCreditsOf = (c) => {
       const fromLog = purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.qty, 0);
@@ -715,6 +721,10 @@ export default function App() {
     const monthCharter = charterLog.filter((r) => monthKey(r.bookDate) === viewMonth).reduce((a, r) => a + r.amount, 0);
     const monthRevenue = monthPurchase + monthCharter;
 
+    // 指定月份已上堂數／已售堂數（同「本月總收入」用返同一個時間範圍，等成行 KPI 對得上數）
+    const monthUsed = allBookings.filter((b) => b.type !== "charter" && monthKey(b.date) === viewMonth).reduce((s, b) => s + b.hours, 0);
+    const monthSold = purchaseLog.filter((r) => monthKey(r.date) === viewMonth).reduce((s, r) => s + r.qty, 0);
+
     // 各教練總付款（買堂 + 初始）
     const coachPaid = {};
     coaches.forEach((c) => { coachPaid[c.id] = purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.amount, 0) + initialCreditsOf(c) * c.rate; });
@@ -743,10 +753,10 @@ export default function App() {
             </div>
             <div style={S.kpiRow}>
               <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月總收入" : `${viewMonth} 收入`}</div><div style={S.kpiBig}>${monthRevenue.toLocaleString()}</div></div>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>已上堂數</div><div style={S.kpiBig}>{totalUsed}</div></div>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>已售堂數</div><div style={S.kpiBig}>{totalSold}</div></div>
+              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已上堂數" : "已上堂數"}</div><div style={S.kpiBig}>{monthUsed}</div></div>
+              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已售堂數" : "已售堂數"}</div><div style={S.kpiBig}>{monthSold}</div></div>
             </div>
-            <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}</p>
+            <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}　｜　累計已上堂數 {totalUsed}　｜　累計已售堂數 {totalSold}</p>
 
             <div style={{ ...S.flexBetween, marginBottom: 0 }}>
               <h2 style={S.sectionTitle}>每月收入</h2>
@@ -1414,7 +1424,15 @@ export default function App() {
             <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
           </div>
           <p style={S.gridHint}>每格 15 分鐘　｜　同一時段最多 2 名教練　｜　按空格揀 1對1/1對2 同時長</p>
+          <div style={S.scaleRow}>
+            <span style={S.scaleLabel}>顯示大小</span>
+            {[1, 0.85, 0.65].map((v) => (
+              <button key={v} style={Math.abs(calScale - v) < 0.001 ? S.scaleBtnActive : S.scaleBtn} onClick={() => updateCalScale(v)}>{Math.round(v * 100)}%</button>
+            ))}
+            <input style={S.scaleSlider} type="range" min="0.6" max="1" step="0.01" value={calScale} onChange={(e) => updateCalScale(parseFloat(e.target.value))} />
+          </div>
           <div style={S.calScroll}>
+            <div style={{ zoom: calScale }}>
             <table style={S.table}>
               <thead><tr><th style={S.thTime}></th>
                 {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}</th>; })}
@@ -1480,6 +1498,7 @@ export default function App() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
           <p style={S.assistHint}>可預約任何時段；24小時內取消需管理員協助。² = 1對2</p>
         </div>
@@ -1838,6 +1857,11 @@ const S = {
   navBtn: { background: "#2a2a2a", border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 14 },
   weekLabel: { color: "#aaa", fontSize: 13 },
   gridHint: { color: "#666", fontSize: 11, marginBottom: 10 },
+  scaleRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" },
+  scaleLabel: { fontSize: 11, color: "#888", marginRight: 2 },
+  scaleBtn: { background: "#2a2a2a", border: "1px solid #333", color: "#aaa", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer" },
+  scaleBtnActive: { background: "#4ECDC4", border: "1px solid #4ECDC4", color: "#000", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 700 },
+  scaleSlider: { flex: 1, minWidth: 80, maxWidth: 140, accentColor: "#4ECDC4" },
   calScroll: { overflowX: "auto", borderRadius: 12, border: "1px solid #222", maxHeight: "60vh", overflowY: "auto" },
   table: { width: "100%", borderCollapse: "collapse", minWidth: 600 },
   thTime: { width: 50, position: "sticky", left: 0, top: 0, zIndex: 4, background: "#1a1a1a" },
