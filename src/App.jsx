@@ -135,6 +135,7 @@ export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
   const [currentUser, setCurrentUser] = useState(() => initialSession?.user || null);
   const [adminPassword, setAdminPassword] = useState(() => persisted("adminPassword", "admin123"));
+  const [whatsappNumber, setWhatsappNumber] = useState(() => persisted("whatsappNumber", ""));
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
   const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
@@ -162,6 +163,7 @@ export default function App() {
     if (!d) return;
     if (d.coaches !== undefined) setCoaches(d.coaches);
     if (d.adminPassword !== undefined) setAdminPassword(d.adminPassword);
+    if (d.whatsappNumber !== undefined) setWhatsappNumber(d.whatsappNumber);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
     if (d.bookings !== undefined) setBookings(d.bookings);
     if (d.purchaseLog !== undefined) setPurchaseLog(d.purchaseLog);
@@ -181,7 +183,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -200,7 +202,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -216,7 +218,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -355,6 +357,13 @@ export default function App() {
     const win = getCoach(coachId)?.cancelWindowHours ?? 24;
     if (currentUser.role === "coach" && hrs < win) return showToast(`${win}小時內取消需要管理員協助`, "error");
     setCancelModal({ date, start, coachId, type });
+  };
+
+  // 撳「攞 QR Code」自動開 WhatsApp，傳訊息去 admin 設定嗰個號碼，連埋呢個 booking 嘅時段
+  const openWhatsAppQR = (date, start, hours) => {
+    if (!whatsappNumber) { showToast("管理員未設定 WhatsApp 號碼，請聯絡管理員", "error"); return; }
+    const msg = encodeURIComponent(`你好，我想攞場地 QR Code 入場。\n預約時段：${date} ${start}–${addMinutes(start, hours * 60)}`);
+    window.open(`https://wa.me/${whatsappNumber}?text=${msg}`, "_blank");
   };
 
   const doCancel = (date, start, coachId, type, byAdmin = false) => {
@@ -1125,6 +1134,16 @@ export default function App() {
             </div>
             <p style={S.assistHint}>※ 收費：1對1 用教練每堂租金；1對2 $150/小時，每加0.5小時 +$50</p>
 
+            {currentUser.role === "admin" && (
+              <>
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
+                  <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
+                </div>
+              </>
+            )}
+
             <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料備份</h2>
             <div style={S.formCard}>
               <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出 Excel，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄。建議定期備份。</p>
@@ -1519,6 +1538,7 @@ export default function App() {
                     <div style={{ flex: 1 }}>
                       <div style={S.bookingCoach}>{date} <span style={type === "duo" ? S.duoTag : S.soloTag}>{type === "duo" ? "1對2" : "1對1"}</span></div>
                       <div style={S.bookingTime}>{start} – {addMinutes(start, hours * 60)}（{hours}小時）</div>
+                      <button style={S.qrBtn} onClick={() => openWhatsAppQR(date, start, hours)}>📲 攞 QR Code</button>
                       {students && students.length > 0 && (
                         <div style={S.signRow}>
                           {students.map((name) => {
@@ -1954,6 +1974,7 @@ const S = {
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 },
   signCanvas: { width: "100%", height: 160, background: "#fff", borderRadius: 10, touchAction: "none", display: "block" },
   signRow: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 },
+  qrBtn: { background: "#13302e", border: "1px solid #1d3a2a", color: "#4ECDC4", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer", marginTop: 6 },
   signChip: { background: "#2a2a2a", border: "1px solid #333", color: "#FFB347", borderRadius: 12, padding: "4px 10px", fontSize: 11, cursor: "pointer" },
   signedChip: { background: "#13302e", border: "1px solid #1d3a2a", color: "#6BCB77", borderRadius: 12, padding: "4px 10px", fontSize: 11, cursor: "default" },
   modal: { background: "#1a1a1a", borderRadius: 16, padding: "28px 24px", width: 320, textAlign: "center", maxHeight: "85vh", overflowY: "auto" },
