@@ -1,135 +1,20 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import { cloudEnabled, cloudLoad, cloudSave, cloudSubscribe } from "./supabase.js";
-
-// ---- 本機儲存（localStorage）：部署到 Vercel 後，資料會喺呢部裝置保存，重新整頁唔會消失 ----
-const LS_KEY = "gymily_data_v1";
-const loadStore = () => {
-  try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
-};
-const initStore = loadStore();
-const persisted = (key, fallback) => (initStore[key] !== undefined ? initStore[key] : fallback);
-
-// ---- 登入狀態（記住密碼）：獨立一個 key，淨係存喺呢部裝置，唔會同其他資料一齊上雲端同步 ----
-const SESSION_KEY = "gymily_session_v1";
-const loadSession = () => { try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch (e) { return null; } };
-const saveSession = (s) => { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } };
-const clearSession = () => { try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ } };
-
-// ---- 日曆縮放偏好：純粹顯示設定，淨係存喺呢部裝置，唔同步 ----
-const CALSCALE_KEY = "gymily_calscale_v1";
-const loadCalScale = () => { try { const v = parseFloat(localStorage.getItem(CALSCALE_KEY)); return v && v >= 0.5 && v <= 1 ? v : 1; } catch (e) { return 1; } };
-const saveCalScale = (v) => { try { localStorage.setItem(CALSCALE_KEY, String(v)); } catch (e) { /* ignore */ } };
-
-// 穩定序列化：將物件 key 依字母排序，令同步比對唔受 Supabase jsonb 重排 key 影響
-function stableStringify(obj) {
-  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) return "[" + obj.map(stableStringify).join(",") + "]";
-  const keys = Object.keys(obj).sort();
-  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
-}
-
-const LOGO = "data:image/png;base64,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";
-
-const DEFAULT_COACHES = [];
-const DEFAULT_SUBADMINS = [
-  { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
-  { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
-];
-const ADMIN_TAB_KEYS = ["overview", "schedule", "coaches", "ledger", "records", "settings"];
-
-// 解析之前記住嘅登入狀態 —— 喺第一次 render 之前就計好，唔會閃一下 login 畫面先再跳轉
-function resolveSession() {
-  const session = loadSession();
-  if (!session) return null;
-  if (session.role === "admin") return { user: { id: 0, name: "管理員", role: "admin" }, view: "admin", adminTab: "overview" };
-  if (session.role === "subadmin") {
-    const subs = persisted("subAdmins", DEFAULT_SUBADMINS);
-    const sub = subs.find((s) => s.id === session.id);
-    if (!sub) { clearSession(); return null; }
-    const firstAllowed = ADMIN_TAB_KEYS.find((k) => sub.permissions?.[k]);
-    return { user: { ...sub, role: "subadmin" }, view: "admin", adminTab: firstAllowed || "settings" };
-  }
-  if (session.role === "coach") {
-    const coaches = persisted("coaches", DEFAULT_COACHES);
-    const coach = coaches.find((c) => c.id === session.id);
-    if (!coach) { clearSession(); return null; }
-    return { user: { ...coach, role: "coach" }, view: "calendar", adminTab: "overview" };
-  }
-  return null;
-}
-const initialSession = resolveSession();
-
-
-const COLORS = ["#FF6B6B", "#4ECDC4", "#FFE66D", "#A8E6CF", "#C9B1FF", "#FFB347", "#FF8FA3", "#6BCB77"];
-
-const MAX_CONCURRENT = 2; // 場地同時最多 2 名教練
-
-// 一對二定價：1小時 $150，每加0.5小時 +$50
-const DUO_BASE = 150;
-const DUO_HALF_HOUR_ADD = 50;
-function duoPrice(hours) { return DUO_BASE + Math.round((hours - 1) / 0.5) * DUO_HALF_HOUR_ADD; }
-
-const CHARTER_PRICE = 300; // 包場 $300 一節（時長由管理員自選），佔全場
-
-// 其他租場類型：包場/小組佔全場（2位），試堂只佔1位（可同教練並存）
-const isWholeVenue = (e) => e.type === "charter" && e.charterType !== "trial";
-const rentalShort = (ct) => ct === "group" ? "小組" : ct === "trial" ? "試堂" : "包場";
-const rentalFull = (ct) => ct === "group" ? "小組訓練" : ct === "trial" ? "試堂" : "私人包場";
-const ASSIST_CANCEL_LIMIT = 1; // 每位教練每月「24小時內由管理員代取消」額度
-const LOW_CREDIT_THRESHOLD = 2; // 剩餘堂數 ≤ 此數視為「快用完」
-
-// 休息日設定（空 = 全週開放）。如需設休息日，例如週五：改成 [5]。getDay(): 日0 一1 二2 三3 四4 五5 六6
-const CLOSED_DAYS = [];
-const isClosedDay = (date) => CLOSED_DAYS.includes(new Date(`${date}T00:00:00`).getDay());
-
-// 15-min grid 07:00–22:00
-const TIME_SLOTS = [];
-for (let h = 7; h < 22; h++) for (let m = 0; m < 60; m += 15) TIME_SLOTS.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
-
-function getDaysOfWeek(offset = 0) {
-  const days = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  today.setDate(today.getDate() + offset);
-  for (let i = 0; i < 7; i++) { const d = new Date(today); d.setDate(today.getDate() + i); days.push(d); }
-  return days;
-}
-const pad2 = (n) => String(n).padStart(2, "0");
-const formatDate = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
-const isTodayDate = (date) => formatDate(date) === formatDate(new Date());
-const formatDay = (date) => `周${["日", "一", "二", "三", "四", "五", "六"][date.getDay()]}`;
-const monthKey = (dateStr) => dateStr.slice(0, 7);
-const hoursUntil = (date, time) => (new Date(`${date}T${time}:00`) - new Date()) / (1000 * 60 * 60);
-function addMinutes(time, mins) {
-  const [h, m] = time.split(":").map(Number);
-  const total = h * 60 + m + mins;
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-}
-// list of 15-min slot keys for a booking of given hours starting at time
-function slotsFor(time, hours) {
-  const n = Math.round(hours * 4);
-  return Array.from({ length: n }, (_, i) => addMinutes(time, i * 15));
-}
-// 將 "HH:MM" 轉做由 07:00 起計嘅第幾個 15 分鐘格（方便計算跨度中點）
-function slotIndex(time) {
-  const [h, m] = time.split(":").map(Number);
-  return (h - 7) * 4 + m / 15;
-}
-// 將一個 booking 嘅顯示內容拆做幾行：教練名/類型、（學生名）、開始時間 —— 每行會分配落唔同嘅實際格仔
-function buildEntryLines(v, isTrial, coachObj, isOwner) {
-  const lines = [];
-  if (isTrial) {
-    lines.push({ text: `試堂${v.coachName ? " · " + v.coachName : ""}`, style: S.slotNameFull });
-  } else if (v.type === "charter") {
-    lines.push({ text: `${rentalShort(v.charterType)}${v.coachName ? " · " + v.coachName : ""}`, style: S.slotNameFull });
-  } else {
-    lines.push({ text: `${coachObj?.name || ""}${v.type === "duo" ? " · 1對2" : " · 1對1"}`, style: S.slotNameFull });
-    if (isOwner && v.students && v.students.length > 0) lines.push({ text: v.students.join("、"), style: S.slotStudentsFull });
-  }
-  lines.push({ text: v.start, style: S.slotTimeFull });
-  return lines;
-}
+import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import {
+  LOGO, STAMP_PNG, DEFAULT_COACHES, DEFAULT_SUBADMINS, ADMIN_TAB_KEYS,
+  COLORS, MAX_CONCURRENT, DUO_BASE, DUO_HALF_HOUR_ADD, CHARTER_PRICE,
+  ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS, TIME_SLOTS, LS_KEY,
+} from "./constants.js";
+import {
+  persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
+  stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
+  isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
+  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines,
+} from "./helpers.js";
+import { S } from "./styles.js";
+import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
 
 export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
@@ -141,6 +26,7 @@ export default function App() {
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
   const [bookings, setBookings] = useState(() => persisted("bookings", {}));
   const [purchaseLog, setPurchaseLog] = useState(() => persisted("purchaseLog", []));
+  const [invoiceCounter, setInvoiceCounter] = useState(() => persisted("invoiceCounter", 1));
   const [ledgerFilter, setLedgerFilter] = useState("all"); // coachId or "all"
   const [ledgerMonth, setLedgerMonth] = useState("all"); // "all" or "YYYY-MM"
   const [editDateRec, setEditDateRec] = useState(null); // {id, date}
@@ -164,6 +50,7 @@ export default function App() {
     if (d.coaches !== undefined) setCoaches(d.coaches);
     if (d.adminPassword !== undefined) setAdminPassword(d.adminPassword);
     if (d.whatsappNumber !== undefined) setWhatsappNumber(d.whatsappNumber);
+    if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
     if (d.bookings !== undefined) setBookings(d.bookings);
     if (d.purchaseLog !== undefined) setPurchaseLog(d.purchaseLog);
@@ -183,7 +70,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, invoiceCounter, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -202,7 +89,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, invoiceCounter, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -218,7 +105,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, invoiceCounter, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -360,9 +247,9 @@ export default function App() {
   };
 
   // 撳「攞 QR Code」自動開 WhatsApp，傳訊息去 admin 設定嗰個號碼，連埋呢個 booking 嘅時段
-  const openWhatsAppQR = (date, start, hours) => {
+  const openWhatsAppQR = (date, start, hours, coachName) => {
     if (!whatsappNumber) { showToast("管理員未設定 WhatsApp 號碼，請聯絡管理員", "error"); return; }
-    const msg = encodeURIComponent(`你好，我想攞場地 QR Code 入場。\n預約時段：${date} ${start}–${addMinutes(start, hours * 60)}`);
+    const msg = encodeURIComponent(`你好，我想攞場地 QR Code 入場。\n預約時段：\n${coachName}\n${date}\n${start}–${addMinutes(start, hours * 60)}`);
     window.open(`https://wa.me/${whatsappNumber}?text=${msg}`, "_blank");
   };
 
@@ -542,6 +429,122 @@ export default function App() {
 
   // sanitize sheet names (Excel: <=31 chars, no : \ / ? * [ ])
   const sheetName = (s) => (s || "").replace(/[:\\/?*[\]]/g, " ").slice(0, 28).trim() || "Sheet";
+  const fmtMoney = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // 生成購買堂數 Invoice（PDF），跟住 Gymily 提供嗰張範本排版；個性化資料（Bill to / Contact Person）留空，
+  // 其他全部跟住教練同呢筆購買記錄自動帶入；公司印章自動貼上。
+  const generateInvoicePDF = async (record) => {
+    try {
+      const teal = rgb(0.067, 0.443, 0.478);
+      const lightBlue = rgb(0.85, 0.91, 0.96);
+      const grey = rgb(0.6, 0.6, 0.6);
+      const black = rgb(0.1, 0.1, 0.1);
+
+      const pdfDoc = await PDFDocument.create();
+      const page = pdfDoc.addPage([595.28, 841.89]); // A4
+      const { width, height } = page.getSize();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const italic = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+
+      const marginX = 42;
+      const rightX = width - marginX;
+
+      // ---- 頂部 teal header ----
+      const headerH = 105;
+      page.drawRectangle({ x: 0, y: height - headerH, width, height: headerH, color: teal });
+      page.drawText("Gymily Studio Limited", { x: rightX - bold.widthOfTextAtSize("Gymily Studio Limited", 13), y: height - 35, size: 13, font: bold, color: rgb(1, 1, 1) });
+      const addrLines = ["709,29-35,Sha Tsui Road ,Technology Plaza,Tsuen", "Wan, N.T"];
+      addrLines.forEach((line, i) => {
+        page.drawText(line, { x: rightX - font.widthOfTextAtSize(line, 9), y: height - 50 - i * 12, size: 9, font, color: rgb(1, 1, 1) });
+      });
+      page.drawText("Invoice", { x: marginX, y: height - headerH + 22, size: 26, font: bold, color: rgb(1, 1, 1) });
+
+      // ---- Bill to / Contact Person（個性化資料，留空） ----
+      let y = height - headerH - 35;
+      page.drawText("Bill to :", { x: marginX, y, size: 9, font: bold, color: black });
+      page.drawText("Contact Person:", { x: marginX + 180, y, size: 9, font: bold, color: black });
+
+      // ---- 右側：根據教練／購買記錄自動帶入 ----
+      const invoiceNo = `GM${String(new Date().getFullYear()).slice(2)}${String(invoiceCounter).padStart(4, "0")}`;
+      const infoRows = [
+        ["Client number :", `Coach-${record.coachName}`],
+        ["Invoice number :", invoiceNo],
+        ["Invoice date :", record.date],
+        ["Payment terms :", "Lesson"],
+      ];
+      infoRows.forEach(([label, val], i) => {
+        const ly = y - i * 16;
+        const labelW = bold.widthOfTextAtSize(label, 9);
+        page.drawText(label, { x: rightX - labelW - font.widthOfTextAtSize(val, 9) - 8, y: ly, size: 9, font: bold, color: black });
+        page.drawText(val, { x: rightX - font.widthOfTextAtSize(val, 9), y: ly, size: 9, font, color: black });
+      });
+
+      // ---- 分隔線 + 表頭 ----
+      y -= 95;
+      page.drawLine({ start: { x: marginX, y }, end: { x: rightX, y }, thickness: 1.4, color: grey });
+      y -= 22;
+      const colItemNo = marginX, colDesc = marginX + 60, colQty = marginX + 300, colUnit = marginX + 360, colAmt = marginX + 440;
+      [["Item no.", colItemNo], ["DESCRIPTION", colDesc], ["Quantity", colQty], ["Unit Price", colUnit], ["AMOUNT", colAmt]].forEach(([txt, x]) => {
+        page.drawText(txt, { x, y, size: 9, font: bold, color: black });
+      });
+      page.drawText("(HKD)", { x: colUnit, y: y - 12, size: 8, font: bold, color: black });
+      page.drawText("(HKD)", { x: colAmt, y: y - 12, size: 8, font: bold, color: black });
+
+      // ---- 資料行 ----
+      y -= 55;
+      page.drawText("Purchase Lesson from coach", { x: colDesc, y, size: 9.5, font, color: black });
+      page.drawText(String(record.qty), { x: colQty, y, size: 9.5, font, color: black });
+      page.drawText(`$${fmtMoney(record.rate)}`, { x: colUnit, y, size: 9.5, font, color: black });
+      page.drawText(`$${fmtMoney(record.amount)}`, { x: colAmt, y, size: 9.5, font, color: black });
+
+      // ---- 總額 ----
+      y -= 70;
+      page.drawLine({ start: { x: marginX, y: y + 25 }, end: { x: rightX, y: y + 25 }, thickness: 1, color: grey });
+      const totalLabel = "Total Amount =";
+      page.drawText(totalLabel, { x: colUnit - 10, y, size: 11, font: bold, color: black });
+      page.drawText(`$${fmtMoney(record.amount)}`, { x: colAmt, y, size: 11, font: bold, color: black });
+
+      // ---- Amount Paid（已收現金，全數）----
+      y -= 35;
+      page.drawLine({ start: { x: marginX, y: y + 25 }, end: { x: rightX, y: y + 25 }, thickness: 1, color: grey });
+      page.drawText("Amount Paid", { x: colUnit - 10, y, size: 9.5, font: bold, color: black });
+      page.drawText(`$${fmtMoney(record.amount)}`, { x: colAmt, y, size: 9.5, font, color: black });
+
+      // ---- Balance Due（已全數收齊，$0）----
+      y -= 35;
+      page.drawRectangle({ x: marginX, y: y - 8, width: rightX - marginX, height: 30, color: lightBlue });
+      page.drawText("Balance Due", { x: colUnit - 10, y, size: 14, font: bold, color: black });
+      page.drawText("$0.00", { x: colAmt, y, size: 16, font: bold, color: black });
+
+      // ---- 簽名格 + 公司印章（照用）----
+      y -= 70;
+      page.drawRectangle({ x: marginX, y, width: 180, height: 55, borderColor: grey, borderWidth: 1 });
+      const stampBytes = await fetch(STAMP_PNG).then((r) => r.arrayBuffer());
+      const stampImg = await pdfDoc.embedPng(stampBytes);
+      const stampW = 90, stampH = stampImg.height * (stampW / stampImg.width);
+      page.drawImage(stampImg, { x: marginX + 240, y: y - 5, width: stampW, height: stampH });
+      page.drawLine({ start: { x: marginX + 230, y: y - 12 }, end: { x: marginX + 230 + stampW + 20, y: y - 12 }, thickness: 1, color: black });
+
+      // ---- 底部 teal footer ----
+      page.drawRectangle({ x: 0, y: 0, width, height: 26, color: teal });
+      const footerTxt = "Thank you for your business";
+      page.drawText(footerTxt, { x: (width - italic.widthOfTextAtSize(footerTxt, 10)) / 2, y: 9, size: 10, font: italic, color: rgb(1, 1, 1) });
+
+      const pdfBytes = await pdfDoc.save();
+      const blob = new Blob([pdfBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${invoiceNo}_${record.coachName}.pdf`;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      setInvoiceCounter((n) => n + 1);
+      showToast(`已生成發票 ${invoiceNo}`);
+    } catch (e) {
+      console.error(e);
+      showToast("生成發票失敗，請再試", "error");
+    }
+  };
 
   const exportExcel = () => {
     try {
@@ -1003,6 +1006,7 @@ export default function App() {
                     <div style={{ textAlign: "right" }}>
                       <div style={S.revenueNum}>+${r.amount.toLocaleString()}</div>
                       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                        <button style={S.linkBtn} onClick={() => generateInvoicePDF(r)}>🧾 開發票</button>
                         <button style={S.linkBtn} onClick={() => setEditDateRec({ id: r.id, date: r.date })}>改日期</button>
                         <button style={{ ...S.linkBtn, color: "#FF6B6B" }} onClick={() => setDelLedgerModal(r)}>剷除</button>
                       </div>
@@ -1538,7 +1542,7 @@ export default function App() {
                     <div style={{ flex: 1 }}>
                       <div style={S.bookingCoach}>{date} <span style={type === "duo" ? S.duoTag : S.soloTag}>{type === "duo" ? "1對2" : "1對1"}</span></div>
                       <div style={S.bookingTime}>{start} – {addMinutes(start, hours * 60)}（{hours}小時）</div>
-                      <button style={S.qrBtn} onClick={() => openWhatsAppQR(date, start, hours)}>📲 攞 QR Code</button>
+                      <button style={S.qrBtn} onClick={() => openWhatsAppQR(date, start, hours, liveUser.name)}>📲 攞 QR Code</button>
                       {students && students.length > 0 && (
                         <div style={S.signRow}>
                           {students.map((name) => {
@@ -1740,248 +1744,3 @@ export default function App() {
     </div>
   );
 }
-
-function EditCoachModal({ coach, onClose, onSave }) {
-  const [form, setForm] = useState({
-    id: coach.id, username: coach.username || "", name: coach.name, credits: coach.credits, rate: coach.rate, password: coach.password,
-    allowSolo: coach.allowSolo !== false, allowDuo: coach.allowDuo !== false, cancelWindowHours: coach.cancelWindowHours || 24,
-  });
-  return (
-    <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320, textAlign: "left" }}>
-      <h3 style={S.modalTitle}>{coach.id ? "編輯教練" : "新增教練"}</h3>
-      <Field label="教練全名（顯示用）"><input style={S.input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
-      <Field label="登入帳號名稱"><input style={S.input} value={form.username} placeholder="例如 alex（登入用，不分大小寫）" onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-      <Field label={coach.id ? "總購買堂數" : "初始購買堂數"}><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: parseInt(e.target.value) || 0 })} /></Field>
-      <Field label="一對一每堂租金 ($)"><input style={S.input} type="number" value={form.rate} onChange={(e) => setForm({ ...form, rate: parseInt(e.target.value) || 0 })} /></Field>
-      <Field label="密碼"><input style={S.input} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
-      <label style={S.label}>預約權限</label>
-      <div style={S.checkRow}>
-        <label style={S.checkLabel}><input type="checkbox" checked={form.allowSolo} onChange={(e) => setForm({ ...form, allowSolo: e.target.checked })} /> 允許一對一</label>
-        <label style={S.checkLabel}><input type="checkbox" checked={form.allowDuo} onChange={(e) => setForm({ ...form, allowDuo: e.target.checked })} /> 允許一對二</label>
-      </div>
-      <Field label="取消需管理員協助嘅時數（小時）"><input style={S.input} type="number" min="0" value={form.cancelWindowHours} onChange={(e) => setForm({ ...form, cancelWindowHours: parseInt(e.target.value) || 0 })} /></Field>
-      {!coach.id && form.credits > 0 && <p style={S.amountPreview}>初始堂數記入流水帳：${(form.credits * form.rate).toLocaleString()}</p>}
-      <div style={S.modalBtns}>
-        <button style={S.modalCancel} onClick={onClose}>取消</button>
-        <button style={S.modalConfirm} onClick={() => { if (!form.name.trim()) return; onSave(form); }}>儲存</button>
-      </div>
-    </div></div>
-  );
-}
-
-function Field({ label, children }) { return <div style={S.inputGroup}><label style={S.label}>{label}</label>{children}</div>; }
-
-// 簽名板：支援滑鼠同觸控（手機）畫簽名，輸出 base64 PNG
-function SignaturePad({ studentName, onSave, onCancel }) {
-  const canvasRef = useRef(null);
-  const drawingRef = useRef(false);
-  const hasDrawnRef = useRef(false);
-  const lastPos = useRef({ x: 0, y: 0 });
-
-  const getCtx = () => canvasRef.current?.getContext("2d");
-
-  const posFromEvent = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const point = e.touches ? e.touches[0] : e;
-    return { x: point.clientX - rect.left, y: point.clientY - rect.top };
-  };
-
-  const start = (e) => {
-    e.preventDefault();
-    drawingRef.current = true;
-    hasDrawnRef.current = true;
-    lastPos.current = posFromEvent(e);
-  };
-  const move = (e) => {
-    if (!drawingRef.current) return;
-    e.preventDefault();
-    const ctx = getCtx();
-    const pos = posFromEvent(e);
-    ctx.strokeStyle = "#000"; ctx.lineWidth = 2.5; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(lastPos.current.x, lastPos.current.y); ctx.lineTo(pos.x, pos.y); ctx.stroke();
-    lastPos.current = pos;
-  };
-  const end = () => { drawingRef.current = false; };
-
-  const clear = () => {
-    const canvas = canvasRef.current;
-    const ctx = getCtx();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    hasDrawnRef.current = false;
-  };
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    canvas.width = canvas.offsetWidth * 2; canvas.height = canvas.offsetHeight * 2;
-    const ctx = canvas.getContext("2d");
-    ctx.scale(2, 2);
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.offsetWidth, canvas.offsetHeight);
-  }, []);
-
-  return (
-    <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320 }}>
-      <h3 style={S.modalTitle}>學生簽到</h3>
-      <p style={S.modalText}>{studentName}　請喺下面簽名作實</p>
-      <canvas ref={canvasRef} style={S.signCanvas}
-        onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
-        onTouchStart={start} onTouchMove={move} onTouchEnd={end} />
-      <div style={S.modalBtns}>
-        <button style={S.modalCancel} onClick={clear}>清除</button>
-        <button style={S.modalCancel} onClick={onCancel}>返回</button>
-        <button style={S.modalConfirm} onClick={() => { if (!hasDrawnRef.current) return; onSave(canvasRef.current.toDataURL("image/png")); }}>確認簽到</button>
-      </div>
-    </div></div>
-  );
-}
-function Header({ title, onLogout, syncState }) {
-  const sync = {
-    synced: { t: "☁️ 已同步", c: "#6BCB77" },
-    connecting: { t: "⟳ 同步中", c: "#FFB347" },
-    error: { t: "⚠️ 同步失敗", c: "#FF6B6B" },
-    local: { t: "📱 本機", c: "#777" },
-  }[syncState] || null;
-  return <div style={S.header}><img src={LOGO} alt="Gymily" style={S.headerLogoImg} /><span style={S.headerUser}>{title}</span>{sync && <span style={{ ...S.syncBadge, color: sync.c }}>{sync.t}</span>}<button style={S.logoutBtn} onClick={onLogout}>登出</button></div>;
-}
-function Toast({ toast }) { return <div style={{ ...S.toast, background: toast.type === "error" ? "#FF6B6B" : "#4ECDC4" }}>{toast.msg}</div>; }
-
-const S = {
-  loginBg: { minHeight: "100vh", background: "#0f0f0f", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" },
-  loginCard: { background: "#1a1a1a", borderRadius: 20, padding: "40px 40px", width: 380, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" },
-  loginLogoImg: { width: 200, display: "block", margin: "0 auto 8px", filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.4))" },
-  loginSub: { color: "#888", textAlign: "center", marginBottom: 28, marginTop: 4 },
-  inputGroup: { marginBottom: 16 },
-  label: { display: "block", color: "#aaa", fontSize: 13, marginBottom: 6 },
-  input: { width: "100%", background: "#2a2a2a", border: "1px solid #333", borderRadius: 10, padding: "12px 14px", color: "#fff", fontSize: 14, outline: "none", boxSizing: "border-box" },
-  loginBtn: { width: "100%", background: "#4ECDC4", color: "#000", border: "none", borderRadius: 10, padding: "14px", fontSize: 16, fontWeight: 700, cursor: "pointer", marginTop: 8 },
-  hint: { color: "#555", fontSize: 11, textAlign: "center", marginTop: 16, lineHeight: 1.6 },
-  appBg: { minHeight: "100vh", background: "#0f0f0f", fontFamily: "'DM Sans', sans-serif", color: "#fff" },
-  header: { display: "flex", alignItems: "center", padding: "12px 20px", background: "#1a1a1a", borderBottom: "1px solid #222" },
-  headerLogoImg: { height: 36, flex: "0 0 auto", marginRight: 16 },
-  syncBadge: { fontSize: 11, marginRight: 12, whiteSpace: "nowrap" },
-  headerUser: { color: "#aaa", fontSize: 14, marginRight: 16, flex: 1 },
-  logoutBtn: { background: "transparent", border: "1px solid #444", color: "#aaa", borderRadius: 8, padding: "6px 12px", fontSize: 13, cursor: "pointer" },
-  creditBar: { display: "flex", justifyContent: "space-between", padding: "10px 20px", background: "#151515", fontSize: 13, color: "#aaa", borderBottom: "1px solid #222" },
-  assistBar: { display: "flex", justifyContent: "space-between", padding: "8px 20px", background: "#121212", fontSize: 12, color: "#888", borderBottom: "1px solid #222" },
-  quotaBox: { border: "1px solid", borderRadius: 10, padding: "10px 12px", margin: "0 0 16px" },
-  soldOutBanner: { background: "#3a1515", color: "#FF8FA3", padding: "10px 20px", fontSize: 13, textAlign: "center", borderBottom: "1px solid #5a2020" },
-  expiryBanner: { background: "#332a0f", color: "#FFB347", padding: "10px 20px", fontSize: 13, textAlign: "center", borderBottom: "1px solid #5a4a1a" },
-  tabRow: { display: "flex", borderBottom: "1px solid #222", background: "#151515", overflowX: "auto" },
-  tab: { flex: 1, background: "transparent", border: "none", color: "#666", padding: "14px 6px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 },
-  tabActive: { flex: 1, background: "transparent", border: "none", color: "#4ECDC4", padding: "14px 6px", fontSize: 12, cursor: "pointer", borderBottom: "2px solid #4ECDC4", fontWeight: 700, whiteSpace: "nowrap", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 },
-  badge: { background: "#4ECDC4", color: "#000", borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 },
-  calContainer: { padding: 16 },
-  container: { padding: 20 },
-  weekNav: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
-  navBtn: { background: "#2a2a2a", border: "none", color: "#fff", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 14 },
-  weekLabel: { color: "#aaa", fontSize: 13 },
-  gridHint: { color: "#666", fontSize: 11, marginBottom: 10 },
-  scaleRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" },
-  scaleLabel: { fontSize: 11, color: "#888", marginRight: 2 },
-  scaleBtn: { background: "#2a2a2a", border: "1px solid #333", color: "#aaa", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer" },
-  scaleBtnActive: { background: "#4ECDC4", border: "1px solid #4ECDC4", color: "#000", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 700 },
-  scaleSlider: { flex: 1, minWidth: 80, maxWidth: 140, accentColor: "#4ECDC4" },
-  calScroll: { overflowX: "auto", borderRadius: 12, border: "1px solid #222", maxHeight: "60vh", overflowY: "auto" },
-  table: { width: "100%", borderCollapse: "collapse", minWidth: 600 },
-  thTime: { width: 50, position: "sticky", left: 0, top: 0, zIndex: 4, background: "#1a1a1a" },
-  th: { padding: "10px 4px", textAlign: "center", background: "#1a1a1a", borderBottom: "1px solid #222", position: "sticky", top: 0, zIndex: 2 },
-  dayLabel: { color: "#888", fontSize: 11 },
-  dateLabel: { color: "#fff", fontWeight: 700, fontSize: 16 },
-  tdTime: { fontSize: 11, padding: "2px 6px", whiteSpace: "nowrap", position: "sticky", left: 0, zIndex: 1, background: "#0f0f0f" },
-  td: { padding: "1px", borderLeft: "1px solid #161616" },
-  slotMulti: { display: "flex", gap: 1, minHeight: 30 },
-  slotChip: { flex: 1, borderRadius: 3, padding: "2px 3px", display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 30, minWidth: 0 },
-  slotName: { fontSize: 10, fontWeight: 700, color: "#fff" },
-  slotNameFull: { fontSize: 9, fontWeight: 700, color: "#fff", lineHeight: 1.1, wordBreak: "break-word", overflow: "hidden" },
-  slotLabelBlock: { display: "flex", flexDirection: "column", gap: 1, minWidth: 0, overflow: "hidden" },
-  slotTimeFull: { fontSize: 8, color: "#ffffffcc", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden" },
-  slotTypeFull: { fontSize: 8, color: "#ffffffaa", lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden" },
-  slotStudentsFull: { fontSize: 8, color: "#FFE66D", fontWeight: 700, lineHeight: 1.1, wordBreak: "break-word", overflow: "hidden" },
-  slotBottomTime: { fontSize: 8, color: "#ffffffaa", lineHeight: 1.1, marginTop: "auto", whiteSpace: "nowrap", overflow: "hidden" },
-  cancelSlotBtn: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 10, padding: 0 },
-  slotEmpty: { width: "100%", minHeight: 20, background: "#1a1a1a", border: "none", borderRadius: 3, color: "#3a3a3a", fontSize: 13, cursor: "pointer" },
-  slotEmptyRO: { minHeight: 20, background: "#1a1a1a", borderRadius: 3 },
-  slotAdd: { width: 18, minHeight: 30, background: "#202020", border: "1px dashed #3a3a3a", borderRadius: 3, color: "#6BCB77", fontSize: 12, cursor: "pointer", flexShrink: 0 },
-  slotPast: { minHeight: 20, background: "#111", borderRadius: 3 },
-  slotDisabled: { minHeight: 20, background: "#141414", borderRadius: 3 },
-  slotClosed: { minHeight: 20, background: "#0c0c0c", borderRadius: 3 },
-  closedTag: { fontSize: 9, color: "#7a4040", marginTop: 2 },
-  todayTag: { fontSize: 9, color: "#4ECDC4", marginTop: 2, fontWeight: 700 },
-  kpiRow: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 24 },
-  kpiCard: { background: "#1a1a1a", borderRadius: 12, padding: "18px 12px", textAlign: "center" },
-  kpiLabel: { color: "#888", fontSize: 12, marginBottom: 6 },
-  kpiBig: { fontSize: 22, fontWeight: 800, color: "#4ECDC4" },
-  sectionTitle: { fontSize: 16, fontWeight: 700, marginBottom: 12, color: "#aaa" },
-  emptyText: { color: "#555", textAlign: "center", padding: "40px 0" },
-  bookingList: { display: "flex", flexDirection: "column", gap: 10 },
-  bookingItem: { background: "#1a1a1a", borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 },
-  coachStatRow: { background: "#1a1a1a", borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 },
-  dot: { width: 10, height: 10, borderRadius: "50%", flexShrink: 0 },
-  avatar: { width: 38, height: 38, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, color: "#000", flexShrink: 0 },
-  bookingCoach: { fontWeight: 600, fontSize: 14 },
-  bookingTime: { color: "#666", fontSize: 12, marginTop: 2 },
-  revenueNum: { fontWeight: 800, fontSize: 15, color: "#4ECDC4" },
-  idTag: { fontSize: 11, color: "#555", marginLeft: 6 },
-  plusTag: { fontSize: 12, color: "#6BCB77", marginLeft: 6 },
-  soloTag: { fontSize: 10, color: "#4ECDC4", background: "#13302e", padding: "1px 6px", borderRadius: 6, marginLeft: 4 },
-  charterTag: { fontSize: 10, color: "#111", background: "#fff", padding: "1px 6px", borderRadius: 6, marginLeft: 4, fontWeight: 700 },
-  duoTag: { fontSize: 10, color: "#FFB347", background: "#33260f", padding: "1px 6px", borderRadius: 6, marginLeft: 4 },
-  cancelledTag: { fontSize: 10, color: "#FF8FA3", background: "#3a1515", padding: "1px 6px", borderRadius: 6, marginLeft: 4 },
-  cancelBtn: { background: "#2a2a2a", border: "none", color: "#FF6B6B", borderRadius: 8, padding: "6px 12px", fontSize: 13, cursor: "pointer" },
-  pastTag: { color: "#555", fontSize: 12 },
-  lockTag: { color: "#FFB347", fontSize: 12 },
-  addBtn: { background: "#4ECDC4", color: "#000", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer" },
-  creditBtn: { background: "#1d3a2a", border: "none", color: "#6BCB77", borderRadius: 8, padding: "6px 10px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" },
-  smallBtn: { background: "#2a2a2a", border: "none", color: "#4ECDC4", borderRadius: 8, padding: "6px 10px", fontSize: 12, cursor: "pointer" },
-  delBtn: { background: "#2a2a2a", border: "none", color: "#FF6B6B", borderRadius: 8, padding: "6px 10px", fontSize: 12, cursor: "pointer" },
-  flexBetween: { display: "flex", alignItems: "center", justifyContent: "space-between" },
-  formCard: { background: "#1a1a1a", borderRadius: 12, padding: 20, maxWidth: 360 },
-  ledgerTotal: { marginTop: 16, padding: "12px 16px", background: "#1a1a1a", borderRadius: 10, fontWeight: 700, color: "#4ECDC4", textAlign: "right" },
-  monthCard: { background: "#1a1a1a", borderRadius: 12, padding: "12px 16px" },
-  monthHead: { fontWeight: 700, fontSize: 14, marginBottom: 8, color: "#fff" },
-  monthRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0" },
-  monthLabel: { fontSize: 13, color: "#999" },
-  classNum: { fontWeight: 700, fontSize: 15, color: "#FFB347" },
-  filterRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 },
-  filterWrap: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 },
-  recSummary: { background: "#151515", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#4ECDC4", fontWeight: 700, marginBottom: 12 },
-  donePill: { fontSize: 10, color: "#888", background: "#222", padding: "1px 6px", borderRadius: 6, marginLeft: 6 },
-  recDetail: { marginTop: 8, padding: "8px 10px", background: "#141414", borderRadius: 8, fontSize: 12, color: "#aaa", lineHeight: 1.7 },
-  lowWarnBox: { background: "#3a1515", color: "#FF8FA3", borderRadius: 10, padding: "10px 12px", fontSize: 12, marginTop: 12, lineHeight: 1.6 },
-  purchaseBreakdown: { background: "#141414", borderRadius: 10, padding: "8px 12px", marginTop: 4, marginBottom: 4, display: "flex", flexDirection: "column", gap: 8 },
-  purchaseRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "1px solid #222", paddingBottom: 8 },
-  lowPill: { fontSize: 10, color: "#fff", background: "#FF6B6B", padding: "1px 6px", borderRadius: 6, marginLeft: 6, fontWeight: 700 },
-  filterLabel: { fontSize: 13, color: "#aaa" },
-  select: { background: "#2a2a2a", border: "1px solid #333", borderRadius: 8, padding: "8px 12px", color: "#fff", fontSize: 13, outline: "none" },
-  linkBtn: { background: "transparent", border: "none", color: "#888", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: "2px 0", marginTop: 2 },
-  assistHint: { color: "#666", fontSize: 12, marginTop: 16 },
-  amountPreview: { color: "#6BCB77", fontSize: 13, fontWeight: 600, margin: "4px 0 12px" },
-  segRow: { display: "flex", gap: 8 },
-  checkRow: { display: "flex", gap: 16, marginBottom: 16 },
-  studentChipWrap: { display: "flex", gap: 6, flexWrap: "wrap" },
-  studentChip: { background: "#2a2a2a", border: "1px solid #333", color: "#ccc", borderRadius: 16, padding: "6px 12px", fontSize: 12, cursor: "pointer" },
-  studentChipActive: { background: "#4ECDC4", border: "1px solid #4ECDC4", color: "#000", borderRadius: 16, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 700 },
-  studentChipDisabled: { background: "#1a1a1a", border: "1px solid #222", color: "#444", borderRadius: 16, padding: "6px 12px", fontSize: 12, cursor: "not-allowed" },
-  rosterChip: { display: "inline-flex", alignItems: "center", gap: 6, background: "#2a2a2a", border: "1px solid #333", color: "#ccc", borderRadius: 16, padding: "6px 8px 6px 12px", fontSize: 12 },
-  rosterRemoveBtn: { background: "transparent", border: "none", color: "#FF8FA3", cursor: "pointer", fontSize: 12, padding: "0 2px" },
-  checkLabel: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#ccc", cursor: "pointer" },
-  seg: { flex: 1, background: "#2a2a2a", border: "1px solid #333", color: "#aaa", borderRadius: 10, padding: "10px", cursor: "pointer", fontSize: 14 },
-  segActive: { flex: 1, background: "#4ECDC4", border: "1px solid #4ECDC4", color: "#000", borderRadius: 10, padding: "10px", cursor: "pointer", fontSize: 14, fontWeight: 700 },
-  segDisabled: { flex: 1, background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#444", borderRadius: 10, padding: "10px", cursor: "not-allowed", fontSize: 14 },
-  priceBox: { background: "#222", borderRadius: 10, padding: "12px 14px", margin: "16px 0" },
-  priceRow: { display: "flex", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "3px 0" },
-  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 },
-  signCanvas: { width: "100%", height: 160, background: "#fff", borderRadius: 10, touchAction: "none", display: "block" },
-  signRow: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 },
-  qrBtn: { background: "#13302e", border: "1px solid #1d3a2a", color: "#4ECDC4", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer", marginTop: 6 },
-  signChip: { background: "#2a2a2a", border: "1px solid #333", color: "#FFB347", borderRadius: 12, padding: "4px 10px", fontSize: 11, cursor: "pointer" },
-  signedChip: { background: "#13302e", border: "1px solid #1d3a2a", color: "#6BCB77", borderRadius: 12, padding: "4px 10px", fontSize: 11, cursor: "default" },
-  modal: { background: "#1a1a1a", borderRadius: 16, padding: "28px 24px", width: 320, textAlign: "center", maxHeight: "85vh", overflowY: "auto" },
-  modalTitle: { fontSize: 18, fontWeight: 700, marginBottom: 12 },
-  modalText: { color: "#aaa", marginBottom: 20, lineHeight: 1.6 },
-  modalBtns: { display: "flex", gap: 12, marginTop: 8 },
-  modalCancel: { flex: 1, background: "#2a2a2a", border: "none", color: "#aaa", borderRadius: 10, padding: 12, cursor: "pointer", fontSize: 14 },
-  modalConfirm: { flex: 1, background: "#4ECDC4", border: "none", color: "#000", borderRadius: 10, padding: 12, cursor: "pointer", fontSize: 14, fontWeight: 700 },
-  toast: { position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", color: "#000", fontWeight: 700, padding: "12px 24px", borderRadius: 30, fontSize: 14, zIndex: 200, boxShadow: "0 4px 20px rgba(0,0,0,0.3)", maxWidth: "90%", textAlign: "center" },
-};
