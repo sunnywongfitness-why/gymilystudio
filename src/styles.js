@@ -19,6 +19,7 @@ export const S = {
   assistBar: { display: "flex", justifyContent: "space-between", padding: "8px 20px", background: "#121212", fontSize: 12, color: "#888", borderBottom: "1px solid #222" },
   quotaBox: { border: "1px solid", borderRadius: 10, padding: "10px 12px", margin: "0 0 16px" },
   soldOutBanner: { background: "#3a1515", color: "#FF8FA3", padding: "10px 20px", fontSize: 13, textAlign: "center", borderBottom: "1px solid #5a2020" },
+  noticeBanner: { background: "#332a0f", color: "#FFB347", padding: "10px 20px", fontSize: 13, textAlign: "center", borderBottom: "1px solid #4a3a15", lineHeight: 1.5 },
   expiryBanner: { background: "#332a0f", color: "#FFB347", padding: "10px 20px", fontSize: 13, textAlign: "center", borderBottom: "1px solid #5a4a1a" },
   tabRow: { display: "flex", borderBottom: "1px solid #222", background: "#151515", overflowX: "auto" },
   tab: { flex: 1, background: "transparent", border: "none", color: "#666", padding: "14px 6px", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", justifyContent: "center", gap: 4 },

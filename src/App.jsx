@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
-import { cloudEnabled, cloudLoad, cloudSave, cloudSubscribe } from "./supabase.js";
+import { cloudEnabled, cloudLoad, cloudSave, cloudSubscribe, SUPABASE_URL } from "./supabase.js";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import {
   LOGO, STAMP_PNG, DEFAULT_COACHES, DEFAULT_SUBADMINS, ADMIN_TAB_KEYS,
@@ -11,7 +11,7 @@ import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
   stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
   isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
-  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines,
+  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate,
 } from "./helpers.js";
 import { S } from "./styles.js";
 import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
@@ -21,17 +21,21 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(() => initialSession?.user || null);
   const [adminPassword, setAdminPassword] = useState(() => persisted("adminPassword", "admin123"));
   const [whatsappNumber, setWhatsappNumber] = useState(() => persisted("whatsappNumber", ""));
+  const [venueNotice, setVenueNotice] = useState(() => persisted("venueNotice", ""));
+  const [suggestionBox, setSuggestionBox] = useState(() => persisted("suggestionBox", []));
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
   const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
   const [bookings, setBookings] = useState(() => persisted("bookings", {}));
   const [purchaseLog, setPurchaseLog] = useState(() => persisted("purchaseLog", []));
   const [invoiceCounter, setInvoiceCounter] = useState(() => persisted("invoiceCounter", 1));
+  const [studentPurchaseLog, setStudentPurchaseLog] = useState(() => persisted("studentPurchaseLog", []));
   const [ledgerFilter, setLedgerFilter] = useState("all"); // coachId or "all"
   const [ledgerMonth, setLedgerMonth] = useState("all"); // "all" or "YYYY-MM"
   const [editDateRec, setEditDateRec] = useState(null); // {id, date}
   const [weekOffset, setWeekOffset] = useState(0);
   const [calScale, setCalScale] = useState(() => loadCalScale());
+  const [myBookingsView, setMyBookingsView] = useState("list"); // list | calendar
   const updateCalScale = (v) => { setCalScale(v); saveCalScale(v); };
   const [bookModal, setBookModal] = useState(null);   // { date, time }
   const [charterModal, setCharterModal] = useState(null); // admin charter { date, time, hours }
@@ -50,7 +54,10 @@ export default function App() {
     if (d.coaches !== undefined) setCoaches(d.coaches);
     if (d.adminPassword !== undefined) setAdminPassword(d.adminPassword);
     if (d.whatsappNumber !== undefined) setWhatsappNumber(d.whatsappNumber);
+    if (d.venueNotice !== undefined) setVenueNotice(d.venueNotice);
+    if (d.suggestionBox !== undefined) setSuggestionBox(d.suggestionBox);
     if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
+    if (d.studentPurchaseLog !== undefined) setStudentPurchaseLog(d.studentPurchaseLog);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
     if (d.bookings !== undefined) setBookings(d.bookings);
     if (d.purchaseLog !== undefined) setPurchaseLog(d.purchaseLog);
@@ -70,7 +77,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, invoiceCounter, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -89,7 +96,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, invoiceCounter, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -105,7 +112,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, invoiceCounter, subAdmins, bookings, purchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -128,6 +135,7 @@ export default function App() {
   const [viewMonth, setViewMonth] = useState(() => monthKey(formatDate(new Date())));
   const [monthsExpanded, setMonthsExpanded] = useState(false);
   const [newStudentName, setNewStudentName] = useState("");
+  const [suggestionText, setSuggestionText] = useState("");
   const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
   const [studentLogOpen, setStudentLogOpen] = useState(null);
   const [resetModal, setResetModal] = useState(false);
@@ -196,26 +204,45 @@ export default function App() {
     if (sessionType === "solo" && liveUser.allowSolo === false) { showToast("你冇一對一預約權限", "error"); return; }
     if (sessionType === "duo" && liveUser.allowDuo === false) { showToast("你冇一對二預約權限", "error"); return; }
     const creditCost = hours; // 1hr = 1堂, 1.5hr = 1.5堂
-    if (creditCost > remaining) { showToast("剩餘堂數不足", "error"); return; }
-    const err = canPlace(date, time, hours);
-    if (err) { showToast(err, "error"); return; }
-    const price = sessionType === "duo" ? duoPrice(hours) : liveUser.rate * hours;
-    const rentalCost = liveUser.rate * hours; // 租場費用：用「落單嗰刻」嘅租金snapshot，日後改租金唔會影響舊紀錄
-    const slots = slotsFor(time, hours);
+    const repeatWeeks = Math.max(1, bookModal.repeatWeeks || 1);
     const selected = Array.isArray(bookModal.students) ? bookModal.students : [];
     const extra = (bookModal.studentOther || "").trim();
     const studentList = [...selected, ...(extra ? [extra] : [])].filter(Boolean).slice(0, 4);
-    // 將每位學生「當時」嘅收費 snapshot 落呢張記錄（roster 有嘅用 roster 收費；自填嘅新名暫定 $0，教練可以之後再幫佈設收費）
     const studentCharges = {};
     studentList.forEach((n) => { const s = myRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
-    const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const price = sessionType === "duo" ? duoPrice(hours) : liveUser.rate * hours;
+    const rentalCost = liveUser.rate * hours; // 租場費用：用「落單嗰刻」嘅租金snapshot，日後改租金唔會影響舊紀錄
+
+    let usedRemaining = remaining;
+    const newBookingsBySlot = {}; // `${date}_${slot}` -> entry to append
+    let okCount = 0, skippedDates = [];
+    for (let w = 0; w < repeatWeeks; w++) {
+      const wDate = w === 0 ? date : addDaysToDate(date, w * 7);
+      if (creditCost > usedRemaining) { skippedDates.push(`${wDate}（堂數不足）`); continue; }
+      const err = canPlace(wDate, time, hours);
+      if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
+      const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      slotsFor(time, hours).forEach((s) => {
+        const key = `${wDate}_${s}`;
+        newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
+      });
+      usedRemaining -= creditCost;
+      okCount++;
+    }
+
+    if (okCount === 0) { showToast(skippedDates[0] || "預約失敗", "error"); return; }
+
     setBookings((prev) => {
       const u = { ...prev };
-      slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
+      Object.entries(newBookingsBySlot).forEach(([key, arr]) => { u[key] = [...(u[key] || []), ...arr]; });
       return u;
     });
-    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, used: c.used + creditCost } : c));
-    showToast("預約成功！");
+    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, used: c.used + creditCost * okCount } : c));
+    if (repeatWeeks > 1) {
+      showToast(skippedDates.length === 0 ? `已成功預約 ${okCount} 週` : `已預約 ${okCount} 週，跳過 ${skippedDates.length} 週：${skippedDates.join("、")}`);
+    } else {
+      showToast("預約成功！");
+    }
     setBookModal(null);
   };
 
@@ -338,7 +365,7 @@ export default function App() {
   };
 
   // 學生名單由舊版「淨係名」升級做完整 record；呢個 helper 兩種格式都食得（向後兼容舊資料）
-  const normStudent = (s) => (typeof s === "string" ? { name: s, rate: 0, credits: 0, used: 0 } : { rate: 0, credits: 0, used: 0, ...s });
+  const normStudent = (s) => (typeof s === "string" ? { name: s, rate: 0, credits: 0, used: 0, phone: "" } : { rate: 0, credits: 0, used: 0, phone: "", ...s });
   const myRoster = (liveUser?.studentRoster || []).map(normStudent);
   const getStudentRoster = (coachId) => (getCoach(coachId)?.studentRoster || []).map(normStudent);
 
@@ -369,6 +396,7 @@ export default function App() {
     const s = myRoster.find((x) => x.name === name);
     if (!s) return;
     updateStudentField(name, "credits", (s.credits || 0) + qty);
+    setStudentPurchaseLog((prev) => [{ id: "sp" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: currentUser.id, studentName: name, date: new Date().toISOString().slice(0, 10), qty, rate: s.rate || 0, amount: (s.rate || 0) * qty }, ...prev]);
     showToast(`已為 ${name} 增加 ${qty} 堂`);
   };
 
@@ -379,6 +407,29 @@ export default function App() {
     const used = s.used || 0;
     const newCredits = Math.max(0, used + newRemain);
     updateStudentField(name, "credits", newCredits);
+  };
+
+  // 匿名改善建議：完全唔存任何身份資訊（冇 coachId、冇帳號），淨係文字＋粗略日期
+  // 日曆同步：每位教練一個獨一無二嘅 token，用嚎驗證 Edge Function 嗰個訂閱連結
+  const genToken = () => (crypto.randomUUID ? crypto.randomUUID() : "t" + Date.now() + Math.random().toString(36).slice(2));
+  const ensureCalendarToken = () => {
+    if (liveUser.calendarToken) return liveUser.calendarToken;
+    const t = genToken();
+    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, calendarToken: t } : c));
+    return t;
+  };
+  const regenerateCalendarToken = () => {
+    const t = genToken();
+    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, calendarToken: t } : c));
+    showToast("已重新生成連結，舊連結會失效");
+  };
+  const calendarFeedUrl = liveUser?.calendarToken ? `${SUPABASE_URL}/functions/v1/coach-calendar?token=${liveUser.calendarToken}` : "";
+
+  const submitSuggestion = (text) => {
+    const t = text.trim();
+    if (!t) return;
+    setSuggestionBox((prev) => [{ id: "sg" + Date.now() + "-" + Math.random().toString(36).slice(2), text: t, date: formatDate(new Date()), read: false }, ...prev]);
+    showToast("已匿名提交，多謝你嘅意見 🙏");
   };
 
   const changePassword = () => {
@@ -747,6 +798,7 @@ export default function App() {
     return (
       <div style={S.appBg}>
         <Header title={isSubAdmin ? `副管理員 · ${currentUser.name}` : "管理員"} onLogout={logout} syncState={syncState} />
+        {venueNotice && venueNotice.trim() && <div style={S.noticeBanner}>📢 {venueNotice}（教練都見到呢條公告）</div>}
         <div style={S.tabRow}>
           {visibleTabs.map(([k, label]) => (
             <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}>{label}</button>
@@ -1140,11 +1192,33 @@ export default function App() {
 
             {currentUser.role === "admin" && (
               <>
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>場地公告</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
+                  <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
+                </div>
+
                 <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
                   <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
                 </div>
+
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
+                <p style={S.assistHint}>教練透過「意見」分頁匿名提交，系統冇存任何身份資訊，連你都查唔到係邊位教練寫嘅。</p>
+                {suggestionBox.length === 0 ? <p style={S.emptyText}>暫無意見</p> : (
+                  <div style={S.bookingList}>
+                    {suggestionBox.map((sg) => (
+                      <div key={sg.id} style={{ ...S.bookingItem, opacity: sg.read ? 0.55 : 1 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={S.bookingTime}>{sg.date}</div>
+                          <div style={{ ...S.bookingCoach, fontWeight: 400, marginTop: 4, whiteSpace: "pre-wrap" }}>{sg.text}</div>
+                        </div>
+                        <button style={S.linkBtn} onClick={() => setSuggestionBox((prev) => prev.map((x) => x.id === sg.id ? { ...x, read: !x.read } : x))}>{sg.read ? "標記未閱" : "標記已閱"}</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             )}
 
@@ -1408,6 +1482,7 @@ export default function App() {
   return (
     <div style={S.appBg}>
       <Header title={`你好，${liveUser.name}`} onLogout={logout} syncState={syncState} />
+      {venueNotice && venueNotice.trim() && <div style={S.noticeBanner}>📢 {venueNotice}</div>}
       <div style={S.creditBar}>
         <span>已購買 {liveUser.credits} 堂</span>
         <span style={{ color: remaining > 0 ? "#4ECDC4" : "#FF6B6B", fontWeight: 700 }}>剩餘 {remaining} 堂</span>
@@ -1436,6 +1511,7 @@ export default function App() {
         <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}>📅 預約場地</button>
         <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}>📋 我的預約 {myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}</button>
         <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}>📈 上堂情況</button>
+        <button style={view === "suggest" ? S.tabActive : S.tab} onClick={() => setView("suggest")}>💬 意見</button>
         <button style={view === "pw" ? S.tabActive : S.tab} onClick={() => setView("pw")}>🔑 改密碼</button>
       </div>
 
@@ -1529,8 +1605,62 @@ export default function App() {
 
       {view === "myBookings" && (
         <div style={S.container}>
-          <h2 style={S.sectionTitle}>我的預約記錄</h2>
-          {myBookings.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
+          <div style={S.flexBetween}>
+            <h2 style={S.sectionTitle}>我的預約記錄</h2>
+            <div style={S.segRow}>
+              <button style={myBookingsView === "list" ? S.segActive : S.seg} onClick={() => setMyBookingsView("list")}>📋 列表</button>
+              <button style={myBookingsView === "calendar" ? S.segActive : S.seg} onClick={() => setMyBookingsView("calendar")}>📅 圖像</button>
+            </div>
+          </div>
+          {myBookingsView === "calendar" ? (
+            <div style={{ marginTop: 14 }}>
+              <div style={S.weekNav}>
+                <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
+                <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
+                <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
+              </div>
+              <p style={S.gridHint}>淨係顯示你自己嘅預約（唯讀，撳「列表」可以取消）</p>
+              <div style={S.calScroll}>
+                <table style={S.table}>
+                  <thead><tr><th style={S.thTime}></th>
+                    {days.map((d) => { const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={S.dayLabel}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today && <div style={S.todayTag}>今日</div>}</th>; })}
+                  </tr></thead>
+                  <tbody>
+                    {TIME_SLOTS.map((time) => {
+                      const isHourStart = time.endsWith(":00");
+                      return (
+                        <tr key={time}>
+                          <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
+                          {days.map((d) => {
+                            const date = formatDate(d);
+                            const mine = cellArr(date, time).filter((v) => v.coachId === currentUser.id);
+                            return (
+                              <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616" }}>
+                                {mine.length > 0 ? (
+                                  <div style={S.slotMulti}>
+                                    {mine.map((v, idx) => {
+                                      const span = Math.round(v.hours * 4);
+                                      const relRow = slotIndex(time) - slotIndex(v.start);
+                                      const lines = buildEntryLines(v, false, liveUser, true);
+                                      let node = null;
+                                      if (span === 1) node = <span style={lines[0].style}>{lines[0].text}</span>;
+                                      else if (relRow < span - 1 && relRow < lines.length) node = <span style={lines[relRow].style}>{lines[relRow].text}</span>;
+                                      else if (relRow === span - 1) node = <span style={S.slotBottomTime}>{addMinutes(v.start, v.hours * 60)}</span>;
+                                      return <div key={idx} style={{ ...S.slotChip, background: liveUser.color + "33", borderLeft: `3px solid ${liveUser.color}` }}>{node}</div>;
+                                    })}
+                                  </div>
+                                ) : <div style={S.slotDisabled} />}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : myBookings.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
             <div style={S.bookingList}>
               {myBookings.map(({ date, start, hours, type, students, signatures }, i) => {
                 const hrs = hoursUntil(date, start);
@@ -1585,6 +1715,29 @@ export default function App() {
             ))}
           </div>
 
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
+          <div style={S.formCard}>
+            {!cloudEnabled ? (
+              <p style={{ ...S.bookingTime, lineHeight: 1.6 }}>呢個功能需要先開啟雲端同步（而家呢部裝置用嘅係本機儲存）。請聯絡管理員設定 Supabase 雲端同步。</p>
+            ) : (
+              <>
+                <p style={{ ...S.bookingTime, marginBottom: 10, lineHeight: 1.6 }}>生成一個專屬連結，加入 Google Calendar／Apple Calendar「訂閱日曆」，之後你嘅 booking 會自動定期更新，唔使再手動匯出。</p>
+                {calendarFeedUrl ? (
+                  <>
+                    <input style={{ ...S.input, fontSize: 11 }} readOnly value={calendarFeedUrl} onFocus={(e) => e.target.select()} />
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button style={{ ...S.creditBtn, flex: 1 }} onClick={async () => { try { await navigator.clipboard.writeText(calendarFeedUrl); showToast("已複製連結"); } catch (e) { showToast("複製失敗，請長按手動複製", "error"); } }}>📋 複製連結</button>
+                      <button style={{ ...S.smallBtn, flex: 1 }} onClick={regenerateCalendarToken}>🔄 重新生成</button>
+                    </div>
+                    <p style={{ ...S.assistHint, marginTop: 8 }}>連結等於密碼，請唔好分享畀其他人。重新生成會令舊連結失效。</p>
+                  </>
+                ) : (
+                  <button style={S.loginBtn} onClick={ensureCalendarToken}>生成同步連結</button>
+                )}
+              </>
+            )}
+          </div>
+
           <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生名單</h2>
           <p style={S.assistHint}>撳學生名展開資料同上課紀錄。預約場地時可以直接揀名單入面嘅學生。</p>
           {roster.length === 0 && <p style={S.emptyText}>仲未有學生，落面新增啦</p>}
@@ -1614,13 +1767,30 @@ export default function App() {
                       </div>
                       <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0" value={s.rate}
                         onChange={(e) => updateStudentField(s.name, "rate", parseInt(e.target.value) || 0)} /></Field>
+                      <Field label="電話（聯絡用，留底備用）"><input style={S.input} value={s.phone || ""} placeholder="例如 85291234567"
+                        onChange={(e) => updateStudentField(s.name, "phone", e.target.value.replace(/[^0-9]/g, ""))} /></Field>
                       <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂</div>
                       <Field label="剩餘堂數">
                         <input style={{ ...S.input, borderColor: low ? "#5a2020" : undefined, color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}
                           type="number" value={remain}
                           onChange={(e) => setStudentRemain(s.name, parseInt(e.target.value) || 0)} />
                       </Field>
-                      <button style={{ ...S.creditBtn, marginTop: 4, marginBottom: 14 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1 })}>+ 幫佈開堂數</button>
+                      <button style={{ ...S.creditBtn, marginTop: 4, marginBottom: 14 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1 })}>+ 幫佢開堂數</button>
+
+                      <div style={{ ...S.assistHint, marginBottom: 4 }}>購堂紀錄</div>
+                      {(() => {
+                        const buyLog = studentPurchaseLog.filter((r) => r.coachId === currentUser.id && r.studentName === s.name);
+                        return buyLog.length === 0 ? <p style={{ ...S.emptyText, padding: "8px 0" }}>暫無購堂紀錄</p> : (
+                          <div style={{ marginBottom: 14 }}>
+                            {buyLog.map((r) => (
+                              <div key={r.id} style={S.purchaseRow}>
+                                <div style={S.bookingTime}>{r.date}　+{r.qty} 堂　@${r.rate}/堂</div>
+                                <div style={{ color: "#6BCB77", fontWeight: 700 }}>${r.amount.toLocaleString()}</div>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
 
                       <div style={{ ...S.assistHint, marginBottom: 4 }}>上課紀錄（近3個月）</div>
                       {log.length === 0 ? <p style={S.emptyText}>暫無紀錄</p> : log.map((l, i) => (
@@ -1646,6 +1816,23 @@ export default function App() {
         </div>
         );
       })()}
+
+      {view === "suggest" && (
+        <div style={S.container}>
+          <h2 style={S.sectionTitle}>匿名改善建議</h2>
+          <div style={S.noticeBanner}>
+            🔒 呢個意見箱<strong>完全匿名</strong>——系統唔會記錄你嘅帳號、名稱或任何身份資訊，管理員見到嘅淨係文字內容同粗略日期。<br />
+            但要老實提你：如果工作室教練人數較少，內容本身（例如提到嘅具體時段、情況）有機會被估到係邊位寫嘅，請自行衡量內容詳細程度。
+          </div>
+          <div style={{ ...S.formCard, marginTop: 14 }}>
+            <Field label="你嘅意見／建議">
+              <textarea style={{ ...S.input, minHeight: 100, resize: "vertical" }} value={suggestionText}
+                onChange={(e) => setSuggestionText(e.target.value)} placeholder="想提啲咩改善建議？" />
+            </Field>
+            <button style={S.loginBtn} onClick={() => { submitSuggestion(suggestionText); setSuggestionText(""); }}>匿名提交</button>
+          </div>
+        </div>
+      )}
 
       {view === "pw" && (
         <div style={S.container}>
@@ -1700,10 +1887,17 @@ export default function App() {
               <input style={{ ...S.input, marginTop: 8 }} value={bookModal.studentOther || ""} placeholder="其他（唔在名單，打名就得）"
                 onChange={(e) => setBookModal({ ...bookModal, studentOther: e.target.value })} />
             )}
+            <label style={{ ...S.label, marginTop: 14 }}>每週重複（同一星期幾、同一時間）</label>
+            <div style={S.segRow}>
+              {[1, 4, 8, 12].map((w) => (
+                <button key={w} style={(bookModal.repeatWeeks || 1) === w ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, repeatWeeks: w })}>{w === 1 ? "唔重複" : `${w}週`}</button>
+              ))}
+            </div>
+            {(bookModal.repeatWeeks || 1) > 1 && <p style={S.assistHint}>會一次過幫你book未來 {bookModal.repeatWeeks} 個星期嘅同一個時段；如果某一週已經被佔用或堂數不足，會自動跳過嗰一週，唔影響其他週。</p>}
             <div style={S.priceBox}>
               <div style={S.priceRow}><span>時段</span><span>{bookModal.time} – {addMinutes(bookModal.time, bookModal.hours * 60)}</span></div>
-              <div style={S.priceRow}><span>扣堂數</span><span>{bookModal.hours} 堂</span></div>
-              <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>{isDuo ? "1對2 收費" : "1對1 收費"}</span><span>${price}</span></div>
+              <div style={S.priceRow}><span>扣堂數</span><span>{bookModal.hours} 堂{(bookModal.repeatWeeks || 1) > 1 ? `（每週，最多扣 ${bookModal.hours * bookModal.repeatWeeks} 堂）` : ""}</span></div>
+              <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>{isDuo ? "1對2 收費" : "1對1 收費"}</span><span>${price}{(bookModal.repeatWeeks || 1) > 1 ? "／週" : ""}</span></div>
             </div>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setBookModal(null)}>返回</button>

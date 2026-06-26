@@ -61,6 +61,7 @@ export function getDaysOfWeek(offset = 0) {
 }
 export const pad2 = (n) => String(n).padStart(2, "0");
 export const formatDate = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+export const addDaysToDate = (dateStr, days) => { const d = new Date(`${dateStr}T00:00:00`); d.setDate(d.getDate() + days); return formatDate(d); };
 export const isTodayDate = (date) => formatDate(date) === formatDate(new Date());
 export const formatDay = (date) => `周${["日", "一", "二", "三", "四", "五", "六"][date.getDay()]}`;
 export const monthKey = (dateStr) => dateStr.slice(0, 7);
