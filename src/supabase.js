@@ -1,6 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
+export { SUPABASE_URL };
+
 // 只有兩個值都填咗先建立 client；否則 cloudEnabled = false，app 用本機儲存
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 export const supa = cloudEnabled ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
