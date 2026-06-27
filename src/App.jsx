@@ -365,7 +365,11 @@ export default function App() {
   };
 
   // 學生名單由舊版「淨係名」升級做完整 record；呢個 helper 兩種格式都食得（向後兼容舊資料）
-  const normStudent = (s) => (typeof s === "string" ? { name: s, rate: 0, credits: 0, used: 0, phone: "" } : { rate: 0, credits: 0, used: 0, phone: "", ...s });
+  const normStudent = (s) => {
+    const obj = typeof s === "string" ? { name: s, rate: 0, credits: 0, used: 0 } : { rate: 0, credits: 0, used: 0, ...s };
+    delete obj.phone; // 私隱考慮：唔再保留學生電話，亦主動清走舊有已存嘅電話資料
+    return obj;
+  };
   const myRoster = (liveUser?.studentRoster || []).map(normStudent);
   const getStudentRoster = (coachId) => (getCoach(coachId)?.studentRoster || []).map(normStudent);
 
@@ -594,6 +598,38 @@ export default function App() {
     } catch (e) {
       console.error(e);
       showToast("生成發票失敗，請再試", "error");
+    }
+  };
+
+  // 教練自己「我的收入（近3個月）」一鍵匯出 .xlsx（Google Sheets／Excel 都可以直接打開）
+  const exportMyIncomeSheet = () => {
+    try {
+      const wb = XLSX.utils.book_new();
+      const monthRows = myIncomeReport.months.map((m) => ({
+        月份: m.month, 計入收入嘅堂數: m.count, 學生收費總額: m.gross, 租場費用: m.rentalCost, 實際收入: m.net,
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monthRows.length ? monthRows : [{ 月份: "", 計入收入嘅堂數: "", 學生收費總額: "", 租場費用: "", 實際收入: "" }]), "每月收入");
+
+      const logRows = [];
+      Object.entries(myIncomeReport.studentLog).forEach(([name, log]) => {
+        log.forEach((l) => logRows.push({ 學生: name, 日期: l.date, 開始: l.start, 時長小時: l.hours, 類型: l.type === "duo" ? "一對二" : "一對一", 收費: l.charge }));
+      });
+      logRows.sort((a, b) => `${b.日期}${b.開始}`.localeCompare(`${a.日期}${a.開始}`));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(logRows.length ? logRows : [{ 學生: "", 日期: "", 開始: "", 時長小時: "", 類型: "", 收費: "" }]), "學生上課紀錄");
+
+      const today = new Date().toISOString().slice(0, 10);
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `我的收入_${liveUser.name}_${today}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast("已匯出（可直接用 Google Sheets 或 Excel 打開）");
+    } catch (e) {
+      showToast("匯出失敗，請再試", "error");
     }
   };
 
@@ -1224,10 +1260,10 @@ export default function App() {
 
             <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料備份</h2>
             <div style={S.formCard}>
-              <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出 Excel，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄。建議定期備份。</p>
-              <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>⬇️ 匯出 Excel 備份</button>
+              <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出檔案可直接用 Google Sheets 或 Excel 打開，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄、取消記錄。建議定期備份。</p>
+              <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>📊 匯出 Google Sheet 備份</button>
               <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff", marginTop: 10 }} onClick={copyLedgerCsv}>📋 複製流水帳 (CSV)</button>
-              <p style={{ ...S.assistHint, marginTop: 10 }}>※ 若下載冇反應（手機 app 常見），可改按「複製流水帳」再貼入 Excel / Google Sheets；或喺電腦瀏覽器開啟再匯出。</p>
+              <p style={{ ...S.assistHint, marginTop: 10 }}>※ 若下載冇反應（手機 app 常見），可改按「複製流水帳」再貼入 Google Sheets / Excel；或喺電腦瀏覽器開啟再匯出。</p>
             </div>
 
             {currentUser.role === "admin" && (
@@ -1705,7 +1741,10 @@ export default function App() {
         const roster = myRoster;
         return (
         <div style={S.container}>
-          <h2 style={S.sectionTitle}>我的收入（近3個月）</h2>
+          <div style={S.flexBetween}>
+            <h2 style={S.sectionTitle}>我的收入（近3個月）</h2>
+            <button style={S.creditBtn} onClick={exportMyIncomeSheet}>📊 匯出 Google Sheet</button>
+          </div>
           <p style={S.assistHint}>只計有填學生名嘅堂（用學生當時收費計）；冇填學生名嘅堂唔計入呢個收入。實際收入＝學生收費總額 － 租場費用（落單嗰刻嘅租金 × 時長）。</p>
           <div style={S.bookingList}>
             {myIncomeReport.months.map((m) => (
@@ -1771,8 +1810,6 @@ export default function App() {
                       </div>
                       <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0" value={s.rate}
                         onChange={(e) => updateStudentField(s.name, "rate", parseInt(e.target.value) || 0)} /></Field>
-                      <Field label="電話（聯絡用，留底備用）"><input style={S.input} value={s.phone || ""} placeholder="例如 85291234567"
-                        onChange={(e) => updateStudentField(s.name, "phone", e.target.value.replace(/[^0-9]/g, ""))} /></Field>
                       <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂</div>
                       <Field label="剩餘堂數">
                         <input style={{ ...S.input, borderColor: low ? "#5a2020" : undefined, color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}
