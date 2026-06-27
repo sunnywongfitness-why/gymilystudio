@@ -57,6 +57,7 @@ export const S = {
   slotEmpty: { width: "100%", minHeight: 20, background: "#1a1a1a", border: "none", borderRadius: 3, color: "#3a3a3a", fontSize: 13, cursor: "pointer" },
   slotEmptyRO: { minHeight: 20, background: "#1a1a1a", borderRadius: 3 },
   slotAdd: { width: 18, minHeight: 30, background: "#202020", border: "1px dashed #3a3a3a", borderRadius: 3, color: "#6BCB77", fontSize: 12, cursor: "pointer", flexShrink: 0 },
+  occupiedBar: { width: 6, minHeight: 30, background: "#3a3a3a", borderRadius: 2, flexShrink: 0 },
   slotPast: { minHeight: 20, background: "#111", borderRadius: 3 },
   slotDisabled: { minHeight: 20, background: "#141414", borderRadius: 3 },
   slotClosed: { minHeight: 20, background: "#0c0c0c", borderRadius: 3 },

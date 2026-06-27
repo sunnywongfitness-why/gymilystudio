@@ -1511,8 +1511,7 @@ export default function App() {
         <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}>📅 預約場地</button>
         <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}>📋 我的預約 {myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}</button>
         <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}>📈 上堂情況</button>
-        <button style={view === "suggest" ? S.tabActive : S.tab} onClick={() => setView("suggest")}>💬 意見</button>
-        <button style={view === "pw" ? S.tabActive : S.tab} onClick={() => setView("pw")}>🔑 改密碼</button>
+        <button style={view === "other" ? S.tabActive : S.tab} onClick={() => setView("other")}>⚙️ 其他</button>
       </div>
 
       {view === "calendar" && (
@@ -1619,7 +1618,7 @@ export default function App() {
                 <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
                 <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
               </div>
-              <p style={S.gridHint}>淨係顯示你自己嘅預約（唯讀，撳「列表」可以取消）</p>
+              <p style={S.gridHint}>自己嘅課堂正常顯示學生名；其他教練嗰格縮細留白，淨係睇到「有人」，等你一眼睇晒成個禮拜邊忙邊閒。撳「列表」可以管理／取消你自己嘅預約</p>
               <div style={S.calScroll}>
                 <table style={S.table}>
                   <thead><tr><th style={S.thTime}></th>
@@ -1633,23 +1632,28 @@ export default function App() {
                           <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
                           {days.map((d) => {
                             const date = formatDate(d);
-                            const mine = cellArr(date, time).filter((v) => v.coachId === currentUser.id);
+                            const here = cellArr(date, time);
+                            const mine = here.filter((v) => v.coachId === currentUser.id);
+                            const others = here.filter((v) => v.coachId !== currentUser.id);
                             return (
                               <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616" }}>
-                                {mine.length > 0 ? (
+                                {here.length === 0 ? <div style={S.slotDisabled} /> : (
                                   <div style={S.slotMulti}>
                                     {mine.map((v, idx) => {
+                                      const label = (v.students && v.students.length > 0) ? v.students.join("、") : (v.type === "duo" ? "1對2" : "1對1");
                                       const span = Math.round(v.hours * 4);
                                       const relRow = slotIndex(time) - slotIndex(v.start);
-                                      const lines = buildEntryLines(v, false, liveUser, true);
-                                      let node = null;
-                                      if (span === 1) node = <span style={lines[0].style}>{lines[0].text}</span>;
-                                      else if (relRow < span - 1 && relRow < lines.length) node = <span style={lines[relRow].style}>{lines[relRow].text}</span>;
-                                      else if (relRow === span - 1) node = <span style={S.slotBottomTime}>{addMinutes(v.start, v.hours * 60)}</span>;
-                                      return <div key={idx} style={{ ...S.slotChip, background: liveUser.color + "33", borderLeft: `3px solid ${liveUser.color}` }}>{node}</div>;
+                                      const showLabel = relRow === 0;
+                                      const showBottomTime = relRow === span - 1;
+                                      return (
+                                        <div key={"m" + idx} style={{ ...S.slotChip, background: liveUser.color + "33", borderLeft: `3px solid ${liveUser.color}` }}>
+                                          {showLabel ? <span style={S.slotNameFull}>{label}</span> : showBottomTime ? <span style={S.slotBottomTime}>{addMinutes(v.start, v.hours * 60)}</span> : null}
+                                        </div>
+                                      );
                                     })}
+                                    {others.map((v, idx) => <div key={"o" + idx} style={S.occupiedBar} />)}
                                   </div>
-                                ) : <div style={S.slotDisabled} />}
+                                )}
                               </td>
                             );
                           })}
@@ -1817,12 +1821,11 @@ export default function App() {
         );
       })()}
 
-      {view === "suggest" && (
+      {view === "other" && (
         <div style={S.container}>
           <h2 style={S.sectionTitle}>匿名改善建議</h2>
           <div style={S.noticeBanner}>
-            🔒 呢個意見箱<strong>完全匿名</strong>——系統唔會記錄你嘅帳號、名稱或任何身份資訊，管理員見到嘅淨係文字內容同粗略日期。<br />
-            但要老實提你：如果工作室教練人數較少，內容本身（例如提到嘅具體時段、情況）有機會被估到係邊位寫嘅，請自行衡量內容詳細程度。
+            🔒 呢個意見箱<strong>完全匿名</strong>。
           </div>
           <div style={{ ...S.formCard, marginTop: 14 }}>
             <Field label="你嘅意見／建議">
@@ -1831,12 +1834,8 @@ export default function App() {
             </Field>
             <button style={S.loginBtn} onClick={() => { submitSuggestion(suggestionText); setSuggestionText(""); }}>匿名提交</button>
           </div>
-        </div>
-      )}
 
-      {view === "pw" && (
-        <div style={S.container}>
-          <h2 style={S.sectionTitle}>修改我的密碼</h2>
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>修改我的密碼</h2>
           <div style={S.formCard}>
             <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
             <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
