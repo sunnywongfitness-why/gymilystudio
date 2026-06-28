@@ -434,11 +434,11 @@ export default function App() {
   };
 
   // 幫學生開堂數（教練自己用，類似 admin 幫教練「+ 堂」嗰個概念）
-  const addStudentCredits = (name, qty) => {
+  const addStudentCredits = (name, qty, date, expiryDate) => {
     const s = myRoster.find((x) => x.name === name);
     if (!s) return;
     updateStudentField(name, "credits", (s.credits || 0) + qty);
-    setStudentPurchaseLog((prev) => [{ id: "sp" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: currentUser.id, studentName: name, date: new Date().toISOString().slice(0, 10), qty, rate: s.rate || 0, amount: (s.rate || 0) * qty }, ...prev]);
+    setStudentPurchaseLog((prev) => [{ id: "sp" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: currentUser.id, studentName: name, date: date || new Date().toISOString().slice(0, 10), expiryDate: expiryDate || "", qty, rate: s.rate || 0, amount: (s.rate || 0) * qty }, ...prev]);
     showToast(`已為 ${name} 增加 ${qty} 堂`);
   };
 
@@ -1973,19 +1973,27 @@ export default function App() {
                           type="number" value={remain}
                           onChange={(e) => setStudentRemain(s.name, parseInt(e.target.value) || 0)} />
                       </Field>
-                      <button style={{ ...S.creditBtn, marginTop: 4, marginBottom: 14 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1 })}>+ 幫佢開堂數</button>
+                      <button style={{ ...S.creditBtn, marginTop: 4, marginBottom: 14 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1, date: formatDate(new Date()), expiryDate: "" })}>+ 幫佢開堂數</button>
 
                       <div style={{ ...S.assistHint, marginBottom: 4 }}>購堂紀錄</div>
                       {(() => {
                         const buyLog = studentPurchaseLog.filter((r) => r.coachId === currentUser.id && r.studentName === s.name);
                         return buyLog.length === 0 ? <p style={{ ...S.emptyText, padding: "8px 0" }}>暫無購堂紀錄</p> : (
                           <div style={{ marginBottom: 14 }}>
-                            {buyLog.map((r) => (
-                              <div key={r.id} style={S.purchaseRow}>
-                                <div style={S.bookingTime}>{r.date}　+{r.qty} 堂　@${r.rate}/堂</div>
-                                <div style={{ color: "#6BCB77", fontWeight: 700 }}>${r.amount.toLocaleString()}</div>
-                              </div>
-                            ))}
+                            {buyLog.map((r) => {
+                              const today = formatDate(new Date());
+                              const expSoon = r.expiryDate && (new Date(`${r.expiryDate}T00:00:00`) - new Date(`${today}T00:00:00`)) / 86400000 <= 14;
+                              const expPast = r.expiryDate && r.expiryDate < today;
+                              return (
+                                <div key={r.id} style={S.purchaseRow}>
+                                  <div style={S.bookingTime}>
+                                    {r.date}　+{r.qty} 堂　@${r.rate}/堂
+                                    {r.expiryDate && <span style={{ color: expPast ? "#FF6B6B" : expSoon ? "#FFB347" : "#777" }}>　{expPast ? "已過期" : "失效"}：{r.expiryDate}</span>}
+                                  </div>
+                                  <div style={{ color: "#6BCB77", fontWeight: 700 }}>${r.amount.toLocaleString()}</div>
+                                </div>
+                              );
+                            })}
                           </div>
                         );
                       })()}
@@ -2121,9 +2129,13 @@ export default function App() {
           <p style={S.modalText}>{addStudentCreditModal.name}</p>
           <Field label="增加幾多堂"><input style={S.input} type="number" min="1" value={addStudentCreditModal.qty}
             onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, qty: parseInt(e.target.value) || 1 })} /></Field>
+          <Field label="增加日期"><input style={S.input} type="date" value={addStudentCreditModal.date || formatDate(new Date())}
+            onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, date: e.target.value })} /></Field>
+          <Field label="失效日期（可選，留空＝冇限期）"><input style={S.input} type="date" value={addStudentCreditModal.expiryDate || ""}
+            onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, expiryDate: e.target.value })} /></Field>
           <div style={S.modalBtns}>
             <button style={S.modalCancel} onClick={() => setAddStudentCreditModal(null)}>取消</button>
-            <button style={S.modalConfirm} onClick={() => { addStudentCredits(addStudentCreditModal.name, addStudentCreditModal.qty); setAddStudentCreditModal(null); }}>確認增加</button>
+            <button style={S.modalConfirm} onClick={() => { addStudentCredits(addStudentCreditModal.name, addStudentCreditModal.qty, addStudentCreditModal.date, addStudentCreditModal.expiryDate); setAddStudentCreditModal(null); }}>確認增加</button>
           </div>
         </div></div>
       )}
