@@ -151,6 +151,7 @@ export default function App() {
   const [suggestionText, setSuggestionText] = useState("");
   const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
   const [studentLogOpen, setStudentLogOpen] = useState(null);
+  const [rosterSortMode, setRosterSortMode] = useState("custom"); // custom | used | remain | name
   const [resetModal, setResetModal] = useState(false);
   const [delCoachModal, setDelCoachModal] = useState(null); // coach pending deletion
   const [showPasswords, setShowPasswords] = useState(false);
@@ -253,7 +254,7 @@ export default function App() {
     if (liveUser.allowFilming !== true) { showToast("你冇拍片權限", "error"); return; }
     const err = canPlace(date, time, hours, MAX_CONCURRENT, currentUser.id, currentUser.id);
     if (err) { showToast(err, "error"); return; }
-    const entry = { coachId: currentUser.id, start: time, hours, type: "charter", charterType: "filming", price: 0, students: [], createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const entry = { coachId: currentUser.id, start: time, hours, type: "charter", charterType: "filming", price: 0, coachName: liveUser.name, students: [], createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
       slotsFor(time, hours).forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -384,7 +385,8 @@ export default function App() {
     showToast("已代教練預約");
   };
 
-  const openCancel = (date, start, coachId, type) => {
+  const openCancel = (date, start, coachId, type, charterType) => {
+    if (type === "charter" && charterType === "filming") { setCancelModal({ date, start, coachId, type }); return; } // 拍片唔涉及堂數，自己隨時可以取消
     const hrs = hoursUntil(date, start);
     const win = getCoach(coachId)?.cancelWindowHours ?? 24;
     if (currentUser.role === "coach" && hrs < win) return showToast(`${win}小時內取消需要管理員協助`, "error");
@@ -515,6 +517,16 @@ export default function App() {
 
   const removeStudent = (name) => {
     setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: myRoster.filter((s) => s.name !== name) } : c));
+  };
+
+  // 自由調位：上／落移一個位（直接改返存住嗰個次序，自訂排序模式先會跟住呢個次序顯示）
+  const moveStudent = (name, dir) => {
+    const idx = myRoster.findIndex((s) => s.name === name);
+    const j = idx + dir;
+    if (idx === -1 || j < 0 || j >= myRoster.length) return;
+    const arr = [...myRoster];
+    [arr[idx], arr[j]] = [arr[j], arr[idx]];
+    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, studentRoster: arr } : c));
   };
 
   // 幫學生開堂數（教練自己用，類似 admin 幫教練「+ 堂」嗰個概念）
@@ -864,7 +876,7 @@ export default function App() {
     const date = k.split("_")[0];
     arr.forEach((v) => {
       if (v.coachId === currentUser?.id && k === `${date}_${v.start}`)
-        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, price: v.price || 0, rentalCost: v.rentalCost ?? (v.price || 0), students: v.students || [], studentCharges: v.studentCharges || {}, signatures: v.signatures || {} });
+        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType || null, coachName: v.coachName || "", price: v.price || 0, rentalCost: v.rentalCost ?? (v.price || 0), students: v.students || [], studentCharges: v.studentCharges || {}, signatures: v.signatures || {} });
     });
   });
   myBookings.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
@@ -1133,7 +1145,7 @@ export default function App() {
                                 return (
                                   <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff" }}>
                                     {node}
-                                    {relRow === 0 && <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: whole.start, coachId: 0, type: "charter" })}>✕</button>}
+                                    {relRow === 0 && <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: whole.start, coachId: whole.coachId, type: "charter" })}>✕</button>}
                                   </div>
                                 );
                               })() : here.length > 0 ? (
@@ -1960,17 +1972,18 @@ export default function App() {
             </div>
           ) : myBookings.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
             <div style={S.bookingList}>
-              {myBookings.map(({ date, start, hours, type, students, signatures }, i) => {
+              {myBookings.map(({ date, start, hours, type, charterType, coachName, students, signatures }, i) => {
                 const hrs = hoursUntil(date, start);
                 const isPast = hrs < 0;
-                const locked = hrs >= 0 && hrs < (liveUser.cancelWindowHours ?? 24);
+                const isFilming = type === "charter" && charterType === "filming";
+                const locked = !isFilming && hrs >= 0 && hrs < (liveUser.cancelWindowHours ?? 24);
                 return (
                   <div key={i} style={S.bookingItem}>
                     <div style={{ ...S.dot, background: liveUser.color }} />
                     <div style={{ flex: 1 }}>
-                      <div style={S.bookingCoach}>{date} <span style={type === "duo" ? S.duoTag : S.soloTag}>{type === "duo" ? "1對2" : "1對1"}</span></div>
+                      <div style={S.bookingCoach}>{date} <span style={isFilming ? S.filmingTag : type === "duo" ? S.duoTag : S.soloTag}>{isFilming ? "🎬 拍片" : type === "duo" ? "1對2" : "1對1"}</span></div>
                       <div style={S.bookingTime}>{start} – {addMinutes(start, hours * 60)}（{hours}小時）</div>
-                      <button style={S.qrBtn} onClick={() => openWhatsAppQR(date, start, hours, liveUser.name)}>📲 攞 QR Code</button>
+                      {!isFilming && <button style={S.qrBtn} onClick={() => openWhatsAppQR(date, start, hours, liveUser.name)}>📲 攞 QR Code</button>}
                       {students && students.length > 0 && (
                         <div style={S.signRow}>
                           {students.map((name) => {
@@ -1986,7 +1999,7 @@ export default function App() {
                     </div>
                     {isPast ? <span style={S.pastTag}>已完成</span>
                       : locked ? <span style={S.lockTag}>🔒 取消需管理員</span>
-                      : <button style={S.cancelBtn} onClick={() => openCancel(date, start, currentUser.id, type)}>取消</button>}
+                      : <button style={S.cancelBtn} onClick={() => openCancel(date, start, currentUser.id, type, charterType)}>取消</button>}
                   </div>
                 );
               })}
@@ -2041,9 +2054,22 @@ export default function App() {
 
           <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生名單</h2>
           <p style={S.assistHint}>撳學生名展開資料同上課紀錄。預約場地時可以直接揀名單入面嘅學生。</p>
+          {roster.length > 1 && (
+            <div style={S.segRow}>
+              <button style={rosterSortMode === "custom" ? S.segActive : S.seg} onClick={() => setRosterSortMode("custom")}>自訂次序</button>
+              <button style={rosterSortMode === "used" ? S.segActive : S.seg} onClick={() => setRosterSortMode("used")}>上堂數</button>
+              <button style={rosterSortMode === "remain" ? S.segActive : S.seg} onClick={() => setRosterSortMode("remain")}>剩餘堂數</button>
+              <button style={rosterSortMode === "name" ? S.segActive : S.seg} onClick={() => setRosterSortMode("name")}>名稱</button>
+            </div>
+          )}
           {roster.length === 0 && <p style={S.emptyText}>仲未有學生，落面新增啦</p>}
           <div style={S.bookingList}>
-            {roster.map((s) => {
+            {(() => {
+              const sorted = [...roster];
+              if (rosterSortMode === "used") sorted.sort((a, b) => (b.used || 0) - (a.used || 0));
+              else if (rosterSortMode === "remain") sorted.sort((a, b) => ((b.credits || 0) - (b.used || 0)) - ((a.credits || 0) - (a.used || 0)));
+              else if (rosterSortMode === "name") sorted.sort((a, b) => a.name.localeCompare(b.name));
+              return sorted.map((s, idx) => {
               const remain = (s.credits || 0) - (s.used || 0);
               const low = remain <= LOW_CREDIT_THRESHOLD;
               const open = studentLogOpen === s.name;
@@ -2051,6 +2077,12 @@ export default function App() {
               return (
                 <div key={s.name}>
                   <div style={{ ...S.coachStatRow, cursor: "pointer" }} onClick={() => setStudentLogOpen(open ? null : s.name)}>
+                    {rosterSortMode === "custom" && (
+                      <div style={{ display: "flex", flexDirection: "column", marginRight: 6 }} onClick={(e) => e.stopPropagation()}>
+                        <button style={S.moveBtn} disabled={idx === 0} onClick={() => moveStudent(s.name, -1)}>▲</button>
+                        <button style={S.moveBtn} disabled={idx === sorted.length - 1} onClick={() => moveStudent(s.name, 1)}>▼</button>
+                      </div>
+                    )}
                     <div style={{ ...S.avatar, background: liveUser.color }}>{s.name.slice(0, 2)}</div>
                     <div style={{ flex: 1 }}>
                       <div style={S.bookingCoach}>{s.name}{low && <span style={S.lowPill}>低</span>}</div>
@@ -2113,7 +2145,8 @@ export default function App() {
                   )}
                 </div>
               );
-            })}
+              });
+            })()}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <input style={S.input} value={newStudentName} placeholder="新學生名" onChange={(e) => setNewStudentName(e.target.value)}
