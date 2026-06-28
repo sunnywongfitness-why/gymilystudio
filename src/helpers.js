@@ -1,5 +1,6 @@
 // 純函數 helper：日期/時間/堂數計算、登入狀態、雲端同步比對等
-import { LS_KEY, SESSION_KEY, CALSCALE_KEY, DEFAULT_COACHES, DEFAULT_SUBADMINS, ADMIN_TAB_KEYS, CLOSED_DAYS } from "./constants.js";
+import { LS_KEY, SESSION_KEY, CALSCALE_KEY, ADMIN_TAB_KEYS } from "./constants.js";
+import { DEFAULT_COACHES, DEFAULT_SUBADMINS, CLOSED_DAYS } from "./brand.js";
 import { S } from "./styles.js";
 
 export const loadStore = () => {

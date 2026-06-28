@@ -1,6 +1,6 @@
 // 獨立嘅 presentational components（唔直接讀寫 App() 嘅 state，淨係收 props）
 import { useState, useRef, useEffect } from "react";
-import { LOGO } from "./constants.js";
+import { LOGO, BRAND_NAME } from "./brand.js";
 import { S } from "./styles.js";
 
 export function EditCoachModal({ coach, onClose, onSave }) {
@@ -103,6 +103,6 @@ export function Header({ title, onLogout, syncState }) {
     error: { t: "⚠️ 同步失敗", c: "#FF6B6B" },
     local: { t: "📱 本機", c: "#777" },
   }[syncState] || null;
-  return <div style={S.header}><img src={LOGO} alt="Gymily" style={S.headerLogoImg} /><span style={S.headerUser}>{title}</span>{sync && <span style={{ ...S.syncBadge, color: sync.c }}>{sync.t}</span>}<button style={S.logoutBtn} onClick={onLogout}>登出</button></div>;
+  return <div style={S.header}><img src={LOGO} alt={BRAND_NAME} style={S.headerLogoImg} /><span style={S.headerUser}>{title}</span>{sync && <span style={{ ...S.syncBadge, color: sync.c }}>{sync.t}</span>}<button style={S.logoutBtn} onClick={onLogout}>登出</button></div>;
 }
 export function Toast({ toast }) { return <div style={{ ...S.toast, background: toast.type === "error" ? "#FF6B6B" : "#4ECDC4" }}>{toast.msg}</div>; }
