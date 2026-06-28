@@ -1,6 +1,6 @@
 // 純函數 helper：日期/時間/堂數計算、登入狀態、雲端同步比對等
 import { LS_KEY, SESSION_KEY, CALSCALE_KEY, ADMIN_TAB_KEYS } from "./constants.js";
-import { DEFAULT_COACHES, DEFAULT_SUBADMINS, CLOSED_DAYS } from "./brand.js";
+import { DEFAULT_COACHES, DEFAULT_SUBADMINS, CLOSED_DAYS, DUO_BASE, DUO_HALF_HOUR_ADD } from "./brand.js";
 import { S } from "./styles.js";
 
 export const loadStore = () => {
@@ -47,8 +47,8 @@ export function resolveSession() {
 export const initialSession = resolveSession();
 export function duoPrice(hours) { return DUO_BASE + Math.round((hours - 1) / 0.5) * DUO_HALF_HOUR_ADD; }
 export const isWholeVenue = (e) => e.type === "charter" && e.charterType !== "trial";
-export const rentalShort = (ct) => ct === "group" ? "小組" : ct === "trial" ? "試堂" : "包場";
-export const rentalFull = (ct) => ct === "group" ? "小組訓練" : ct === "trial" ? "試堂" : "私人包場";
+export const rentalShort = (ct) => ct === "group" ? "小組" : ct === "trial" ? "試堂" : ct === "clean" ? "清潔" : ct === "filming" ? "拍片" : "包場";
+export const rentalFull = (ct) => ct === "group" ? "小組訓練" : ct === "trial" ? "試堂" : ct === "clean" ? "封場清潔" : ct === "filming" ? "拍片" : "私人包場";
 export const isClosedDay = (date) => CLOSED_DAYS.includes(new Date(`${date}T00:00:00`).getDay());
 
 // 15-min grid 07:00–22:00

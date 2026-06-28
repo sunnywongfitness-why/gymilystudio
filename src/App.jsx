@@ -29,6 +29,7 @@ export default function App() {
   const [suggestionBox, setSuggestionBox] = useState(() => persisted("suggestionBox", []));
   const [adminCalendarToken, setAdminCalendarToken] = useState(() => persisted("adminCalendarToken", ""));
   const [signatureStore, setSignatureStore] = useState(() => persisted("signatureStore", {})); // 簽名圖獨立存一份，唔跟住 booking 喺每個15分鐘格重複
+  const [filmingNotices, setFilmingNotices] = useState(() => persisted("filmingNotices", [])); // 拍片被頂走嘅通知
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
   const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
@@ -67,6 +68,7 @@ export default function App() {
     if (d.suggestionBox !== undefined) setSuggestionBox(d.suggestionBox);
     if (d.adminCalendarToken !== undefined) setAdminCalendarToken(d.adminCalendarToken);
     if (d.signatureStore !== undefined) setSignatureStore(d.signatureStore);
+    if (d.filmingNotices !== undefined) setFilmingNotices(d.filmingNotices);
     if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
     if (d.studentPurchaseLog !== undefined) setStudentPurchaseLog(d.studentPurchaseLog);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
@@ -88,7 +90,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -107,7 +109,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -123,7 +125,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -185,20 +187,55 @@ export default function App() {
   const soldOut = isCoach && remaining <= 0;
 
   // bookings[key] is an ARRAY of entries; each entry occupies "seats" (包場/小組=2, 其他=1)
+  // 拍片（charterType==="filming"）對冇「允許拍片」權限嘅教練嚎講，唔佔任何位——即係佈哋睇落同空格一樣，照樣book到
   const cellArr = (date, slot) => bookings[`${date}_${slot}`] || [];
-  const seats = (entry) => (isWholeVenue(entry) ? MAX_CONCURRENT : 1);
-  const occupancy = (date, slot) => cellArr(date, slot).reduce((n, e) => n + seats(e), 0);
+  const canSeeFilming = (viewerCoachId) => {
+    if (viewerCoachId == null) return true; // null = admin/系統角度，永遠見到全部
+    const viewer = getCoach(viewerCoachId);
+    return !!(viewer && viewer.allowFilming === true);
+  };
+  const seats = (entry, viewerCoachId) => {
+    if (entry.type === "charter" && entry.charterType === "filming" && !canSeeFilming(viewerCoachId)) return 0;
+    return isWholeVenue(entry) ? MAX_CONCURRENT : 1;
+  };
+  const occupancy = (date, slot, viewerCoachId) => cellArr(date, slot).reduce((n, e) => n + seats(e, viewerCoachId), 0);
+  // 畫面顯示用：對冇拍片權限嘅教練，過濾走（唔屬於自己嘅）拍片 entry，等佈睇落係空格
+  const visibleCellArr = (date, slot, viewerCoachId) => cellArr(date, slot).filter((e) => {
+    if (!(e.type === "charter" && e.charterType === "filming")) return true;
+    if (viewerCoachId != null && e.coachId === viewerCoachId) return true; // 自己落嘅拍片，自己一定見到
+    return canSeeFilming(viewerCoachId);
+  });
 
   // can we place a booking of `hours` at date/time? need = 需要幾多個位
-  const canPlace = (date, time, hours, need = 1) => {
+  // coachId（如果提供）：額外檢查嗰位教練自己係咪已經有重疊嘅 booking（防止同一個教練幫自己撞期）
+  // viewerCoachId（如果提供）：用嗰位教練嘅角度判斷拍片睇唔睇到（null = admin 角度，永遠見到）
+  const canPlace = (date, time, hours, need = 1, coachId = null, viewerCoachId = undefined) => {
+    const vid = viewerCoachId === undefined ? coachId : viewerCoachId;
     const slots = slotsFor(time, hours);
     for (const s of slots) {
       const [hh] = s.split(":").map(Number);
       if (hh >= 22) return "超出營業時間";
-      if (occupancy(date, s) + need > MAX_CONCURRENT)
+      if (occupancy(date, s, vid) + need > MAX_CONCURRENT)
         return need >= MAX_CONCURRENT ? "呢個時段唔夠空（包場／小組需全場）" : "呢個時段已滿（最多2名）";
+      if (coachId != null && cellArr(date, s).some((e) => e.coachId === coachId))
+        return "呢個時段同你自己另一個預約重疊";
     }
     return null;
+  };
+
+  // 自動頂走拍片：如果新 booking 撞到「對嗰位 viewer 嚎講睇唔到」嘅拍片安排，搵返晒嗰啲拍片安排嚎準備取消
+  // 用 Map 去重（一個拍片 booking 跨幾個15分鐘格，唔好重複算）
+  const findOverriddenFilming = (date, slots, viewerCoachId) => {
+    if (canSeeFilming(viewerCoachId)) return []; // 見到拍片嘅人本身會被 canPlace 擋住，唔會行到呢一步
+    const found = new Map();
+    slots.forEach((s) => {
+      cellArr(date, s).forEach((e) => {
+        if (e.type === "charter" && e.charterType === "filming") {
+          found.set(`${e.coachId}_${e.start}`, { coachId: e.coachId, start: e.start, hours: e.hours, date });
+        }
+      });
+    });
+    return Array.from(found.values());
   };
 
   const openBook = (date, time) => {
@@ -210,8 +247,25 @@ export default function App() {
     setBookModal({ date, time, sessionType: allowSolo ? "solo" : "duo", hours: 1, students: [], studentOther: "" });
   };
 
+  // 教練自己落拍片（要有「允許拍片」權限）：佔全場、$0、唔扣堂數，對冇權限嘅教練當空格
+  const confirmFilmingBooking = () => {
+    const { date, time, hours } = bookModal;
+    if (liveUser.allowFilming !== true) { showToast("你冇拍片權限", "error"); return; }
+    const err = canPlace(date, time, hours, MAX_CONCURRENT, currentUser.id, currentUser.id);
+    if (err) { showToast(err, "error"); return; }
+    const entry = { coachId: currentUser.id, start: time, hours, type: "charter", charterType: "filming", price: 0, students: [], createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    setBookings((prev) => {
+      const u = { ...prev };
+      slotsFor(time, hours).forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
+      return u;
+    });
+    showToast("已落拍片安排（其他教練見唔到，但有人book中會自動取消）");
+    setBookModal(null);
+  };
+
   const confirmBook = () => {
     const { date, time, sessionType, hours } = bookModal;
+    if (sessionType === "filming") return confirmFilmingBooking();
     if (sessionType === "solo" && liveUser.allowSolo === false) { showToast("你冇一對一預約權限", "error"); return; }
     if (sessionType === "duo" && liveUser.allowDuo === false) { showToast("你冇一對二預約權限", "error"); return; }
     const creditCost = hours; // 1hr = 1堂, 1.5hr = 1.5堂
@@ -226,14 +280,17 @@ export default function App() {
 
     let usedRemaining = remaining;
     const newBookingsBySlot = {}; // `${date}_${slot}` -> entry to append
+    const filmingToCancel = []; // 因為呢次 book 堂而被自動取消嘅拍片安排
     let okCount = 0, skippedDates = [];
     for (let w = 0; w < repeatWeeks; w++) {
       const wDate = w === 0 ? date : addDaysToDate(date, w * 7);
       if (creditCost > usedRemaining) { skippedDates.push(`${wDate}（堂數不足）`); continue; }
-      const err = canPlace(wDate, time, hours);
+      const err = canPlace(wDate, time, hours, 1, currentUser.id);
       if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
+      const wSlots = slotsFor(time, hours);
+      findOverriddenFilming(wDate, wSlots, currentUser.id).forEach((f) => filmingToCancel.push(f));
       const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
-      slotsFor(time, hours).forEach((s) => {
+      wSlots.forEach((s) => {
         const key = `${wDate}_${s}`;
         newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
       });
@@ -245,9 +302,19 @@ export default function App() {
 
     setBookings((prev) => {
       const u = { ...prev };
+      // 先取消被頂走嘅拍片（移走嗰啲安排嘅全部15分鐘格副本）
+      filmingToCancel.forEach((f) => {
+        slotsFor(f.start, f.hours).forEach((s) => {
+          const key = `${f.date}_${s}`;
+          u[key] = (u[key] || []).filter((e) => !(e.type === "charter" && e.charterType === "filming" && e.coachId === f.coachId && e.start === f.start));
+        });
+      });
       Object.entries(newBookingsBySlot).forEach(([key, arr]) => { u[key] = [...(u[key] || []), ...arr]; });
       return u;
     });
+    if (filmingToCancel.length > 0) {
+      setFilmingNotices((prev) => [...filmingToCancel.map((f) => ({ id: "fn" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: f.coachId, date: f.date, start: f.start, hours: f.hours, read: false })), ...prev]);
+    }
     setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, used: c.used + creditCost * okCount } : c));
     if (repeatWeeks > 1) {
       showToast(skippedDates.length === 0 ? `已成功預約 ${okCount} 週` : `已預約 ${okCount} 週，跳過 ${skippedDates.length} 週：${skippedDates.join("、")}`);
@@ -264,7 +331,7 @@ export default function App() {
     const need = charterType === "trial" ? 1 : MAX_CONCURRENT;
     const err = canPlace(date, time, hours, need);
     if (err) { showToast(err, "error"); return; }
-    const amt = charterType === "trial" ? 0 : (parseInt(price) || 0);
+    const amt = ["trial", "clean"].includes(charterType) ? 0 : (parseInt(price) || 0);
     const slots = slotsFor(time, hours);
     const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
@@ -285,7 +352,7 @@ export default function App() {
     const creditCost = hours;
     const remain = coach.credits - coach.used;
     if (creditCost > remain) { showToast(`${coach.name} 剩餘堂數不足`, "error"); return; }
-    const err = canPlace(date, time, hours);
+    const err = canPlace(date, time, hours, 1, coachId);
     if (err) { showToast(err, "error"); return; }
     const price = sessionType === "duo" ? duoPrice(hours) : coach.rate * hours;
     const rentalCost = coach.rate * hours;
@@ -293,12 +360,23 @@ export default function App() {
     const coachRoster = getStudentRoster(coachId);
     const studentCharges = {};
     studentList.forEach((n) => { const s = coachRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
+    const slots = slotsFor(time, hours);
+    const filmingToCancel = findOverriddenFilming(date, slots, coachId);
     const entry = { coachId, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
-      slotsFor(time, hours).forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
+      filmingToCancel.forEach((f) => {
+        slotsFor(f.start, f.hours).forEach((s) => {
+          const key = `${f.date}_${s}`;
+          u[key] = (u[key] || []).filter((e) => !(e.type === "charter" && e.charterType === "filming" && e.coachId === f.coachId && e.start === f.start));
+        });
+      });
+      slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
       return u;
     });
+    if (filmingToCancel.length > 0) {
+      setFilmingNotices((prev) => [...filmingToCancel.map((f) => ({ id: "fn" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: f.coachId, date: f.date, start: f.start, hours: f.hours, read: false })), ...prev]);
+    }
     setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: c.used + creditCost } : c));
     const summary = `你好 ${coach.name}，管理員已幫你預約：\n日期：${date}\n時間：${time}–${addMinutes(time, hours * 60)}\n類型：${sessionType === "duo" ? "1對2" : "1對1"}${studentList.length ? `\n學生：${studentList.join("、")}` : ""}`;
     setAdminCoachBookModal(null);
@@ -1454,12 +1532,15 @@ export default function App() {
 
             <label style={S.label}>類型</label>
             <div style={S.segRow}>
-              <button style={charterModal.charterType === "private" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "private", price: charterModal.charterType === "trial" ? CHARTER_PRICE : charterModal.price })}>私人包場</button>
-              <button style={charterModal.charterType === "group" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "group", price: charterModal.charterType === "trial" ? CHARTER_PRICE : charterModal.price })}>小組訓練</button>
+              <button style={charterModal.charterType === "private" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "private", price: ["trial", "clean"].includes(charterModal.charterType) ? CHARTER_PRICE : charterModal.price })}>私人包場</button>
+              <button style={charterModal.charterType === "group" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "group", price: ["trial", "clean"].includes(charterModal.charterType) ? CHARTER_PRICE : charterModal.price })}>小組訓練</button>
               <button style={charterModal.charterType === "trial" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "trial", price: 0 })}>試堂</button>
+              <button style={charterModal.charterType === "clean" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "clean", price: 0 })}>🧹 清潔</button>
             </div>
             {charterModal.charterType === "trial"
               ? <p style={{ ...S.assistHint, marginTop: 6 }}>試堂只佔 1 個位，同一時段仲可以有教練 book，唔收費。</p>
+              : charterModal.charterType === "clean"
+              ? <p style={{ ...S.assistHint, marginTop: 6 }}>封場清潔，獨佔全場（2 位），$0，全部教練都見到呢格係「清潔」，唔可以book。</p>
               : <p style={{ ...S.assistHint, marginTop: 6 }}>包場／小組會獨佔全場（2 位）。</p>}
 
             <label style={{ ...S.label, marginTop: 14 }}>時長</label>
@@ -1483,8 +1564,8 @@ export default function App() {
               {coaches.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
 
-            {charterModal.charterType === "trial" ? (
-              <p style={{ ...S.amountPreview, color: "#999", marginTop: 14 }}>試堂不收費，唔會計入收入。</p>
+            {["trial", "clean"].includes(charterModal.charterType) ? (
+              <p style={{ ...S.amountPreview, color: "#999", marginTop: 14 }}>{charterModal.charterType === "clean" ? "封場清潔不收費，唔會計入收入。" : "試堂不收費，唔會計入收入。"}</p>
             ) : (
               <>
                 <label style={{ ...S.label, marginTop: 14 }}>收費 ($，可自由修改)</label>
@@ -1496,7 +1577,7 @@ export default function App() {
             <div style={S.priceBox}>
               <div style={S.priceRow}><span>時段</span><span>{charterModal.time} – {addMinutes(charterModal.time, charterModal.hours * 60)}</span></div>
               <div style={S.priceRow}><span>場地</span><span>{charterModal.charterType === "trial" ? "佔 1 位（可同教練並存）" : "全場獨佔"}</span></div>
-              <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>收費</span><span>{charterModal.charterType === "trial" ? "免費" : `$${parseInt(charterModal.price) || 0}`}</span></div>
+              <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>收費</span><span>{["trial", "clean"].includes(charterModal.charterType) ? "免費" : `$${parseInt(charterModal.price) || 0}`}</span></div>
             </div>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setCharterModal(null)}>返回</button>
@@ -1743,8 +1824,8 @@ export default function App() {
                       <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
                       {days.map((d) => {
                         const date = formatDate(d);
-                        const here = cellArr(date, time);
-                        const occ = occupancy(date, time);
+                        const here = visibleCellArr(date, time, currentUser.id);
+                        const occ = occupancy(date, time, currentUser.id);
                         const whole = here.find(isWholeVenue);
                         const isPast = hoursUntil(date, time) < 0;
                         const closed = isClosedDay(date);
@@ -1804,6 +1885,19 @@ export default function App() {
 
       {view === "myBookings" && (
         <div style={S.container}>
+          {(() => {
+            const myNotices = filmingNotices.filter((n) => n.coachId === currentUser.id && !n.read);
+            return myNotices.length > 0 && (
+              <div style={S.noticeBanner}>
+                {myNotices.map((n) => (
+                  <div key={n.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span>🎬 你 {n.date} {n.start} 嘅拍片安排已經被教練 book 走，請另揀時間</span>
+                    <button style={S.linkBtn} onClick={() => setFilmingNotices((prev) => prev.map((x) => x.id === n.id ? { ...x, read: true } : x))}>知道了</button>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           <div style={S.flexBetween}>
             <h2 style={S.sectionTitle}>我的預約記錄</h2>
             <div style={S.segRow}>
@@ -1832,7 +1926,7 @@ export default function App() {
                           <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
                           {days.map((d) => {
                             const date = formatDate(d);
-                            const here = cellArr(date, time);
+                            const here = visibleCellArr(date, time, currentUser.id);
                             const mine = here.filter((v) => v.coachId === currentUser.id);
                             const others = here.filter((v) => v.coachId !== currentUser.id);
                             return (
@@ -2056,56 +2150,70 @@ export default function App() {
 
       {bookModal && (() => {
         const isDuo = bookModal.sessionType === "duo";
+        const isFilming = bookModal.sessionType === "filming";
         const price = isDuo ? duoPrice(bookModal.hours) : liveUser.rate * bookModal.hours;
         const allowSolo = liveUser.allowSolo !== false;
         const allowDuo = liveUser.allowDuo !== false;
+        const allowFilming = liveUser.allowFilming === true;
         return (
           <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
             <h3 style={{ ...S.modalTitle, textAlign: "center" }}>預約場地</h3>
             <p style={{ ...S.modalText, textAlign: "center" }}>{bookModal.date}　{bookModal.time}</p>
             <label style={S.label}>類型</label>
             <div style={S.segRow}>
-              <button style={!allowSolo ? S.segDisabled : !isDuo ? S.segActive : S.seg} disabled={!allowSolo} onClick={() => allowSolo && setBookModal({ ...bookModal, sessionType: "solo" })}>1對1</button>
+              <button style={!allowSolo ? S.segDisabled : (!isDuo && !isFilming) ? S.segActive : S.seg} disabled={!allowSolo} onClick={() => allowSolo && setBookModal({ ...bookModal, sessionType: "solo" })}>1對1</button>
               <button style={!allowDuo ? S.segDisabled : isDuo ? S.segActive : S.seg} disabled={!allowDuo} onClick={() => allowDuo && setBookModal({ ...bookModal, sessionType: "duo" })}>1對2</button>
+              {allowFilming && <button style={isFilming ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, sessionType: "filming" })}>🎬 拍片</button>}
             </div>
+            {isFilming && <p style={S.assistHint}>拍片佔全場、$0、唔扣堂數。其他冇拍片權限嘅教練見唔到呢格（當空格）；如果有人 book 中，呢個拍片安排會自動取消，你會收到通知。</p>}
             <label style={{ ...S.label, marginTop: 14 }}>時長</label>
             <div style={S.segRow}>
               <button style={bookModal.hours === 1 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1 })}>1 小時</button>
               <button style={bookModal.hours === 1.5 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1.5 })}>1.5 小時</button>
             </div>
-            <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位，只有你自己睇到）</label>
-            {myRoster.length === 0 ? (
-              <p style={S.assistHint}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
-            ) : (
-              <div style={S.studentChipWrap}>
-                {myRoster.map(({ name }) => {
-                  const sel = Array.isArray(bookModal.students) && bookModal.students.includes(name);
-                  const atMax = !sel && (bookModal.students || []).length >= 4;
-                  return (
-                    <button key={name} disabled={atMax} style={sel ? S.studentChipActive : atMax ? S.studentChipDisabled : S.studentChip}
-                      onClick={() => {
-                        const cur = bookModal.students || [];
-                        setBookModal({ ...bookModal, students: sel ? cur.filter((n) => n !== name) : [...cur, name] });
-                      }}>{name}</button>
-                  );
-                })}
-              </div>
+            {!isFilming && (
+              <>
+                <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位，只有你自己睇到）</label>
+                {myRoster.length === 0 ? (
+                  <p style={S.assistHint}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
+                ) : (
+                  <div style={S.studentChipWrap}>
+                    {myRoster.map(({ name }) => {
+                      const sel = Array.isArray(bookModal.students) && bookModal.students.includes(name);
+                      const atMax = !sel && (bookModal.students || []).length >= 4;
+                      return (
+                        <button key={name} disabled={atMax} style={sel ? S.studentChipActive : atMax ? S.studentChipDisabled : S.studentChip}
+                          onClick={() => {
+                            const cur = bookModal.students || [];
+                            setBookModal({ ...bookModal, students: sel ? cur.filter((n) => n !== name) : [...cur, name] });
+                          }}>{name}</button>
+                      );
+                    })}
+                  </div>
+                )}
+                {(bookModal.students || []).length < 4 && (
+                  <input style={{ ...S.input, marginTop: 8 }} value={bookModal.studentOther || ""} placeholder="其他（唔在名單，打名就得）"
+                    onChange={(e) => setBookModal({ ...bookModal, studentOther: e.target.value })} />
+                )}
+                <label style={{ ...S.label, marginTop: 14 }}>每週重複（同一星期幾、同一時間）</label>
+                <div style={S.segRow}>
+                  {[1, 4, 8, 12].map((w) => (
+                    <button key={w} style={(bookModal.repeatWeeks || 1) === w ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, repeatWeeks: w })}>{w === 1 ? "唔重複" : `${w}週`}</button>
+                  ))}
+                </div>
+                {(bookModal.repeatWeeks || 1) > 1 && <p style={S.assistHint}>會一次過幫你book未來 {bookModal.repeatWeeks} 個星期嘅同一個時段；如果某一週已經被佔用或堂數不足，會自動跳過嗰一週，唔影響其他週。</p>}
+              </>
             )}
-            {(bookModal.students || []).length < 4 && (
-              <input style={{ ...S.input, marginTop: 8 }} value={bookModal.studentOther || ""} placeholder="其他（唔在名單，打名就得）"
-                onChange={(e) => setBookModal({ ...bookModal, studentOther: e.target.value })} />
-            )}
-            <label style={{ ...S.label, marginTop: 14 }}>每週重複（同一星期幾、同一時間）</label>
-            <div style={S.segRow}>
-              {[1, 4, 8, 12].map((w) => (
-                <button key={w} style={(bookModal.repeatWeeks || 1) === w ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, repeatWeeks: w })}>{w === 1 ? "唔重複" : `${w}週`}</button>
-              ))}
-            </div>
-            {(bookModal.repeatWeeks || 1) > 1 && <p style={S.assistHint}>會一次過幫你book未來 {bookModal.repeatWeeks} 個星期嘅同一個時段；如果某一週已經被佔用或堂數不足，會自動跳過嗰一週，唔影響其他週。</p>}
             <div style={S.priceBox}>
               <div style={S.priceRow}><span>時段</span><span>{bookModal.time} – {addMinutes(bookModal.time, bookModal.hours * 60)}</span></div>
-              <div style={S.priceRow}><span>扣堂數</span><span>{bookModal.hours} 堂{(bookModal.repeatWeeks || 1) > 1 ? `（每週，最多扣 ${bookModal.hours * bookModal.repeatWeeks} 堂）` : ""}</span></div>
-              <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>{isDuo ? "1對2 收費" : "1對1 收費"}</span><span>${price}{(bookModal.repeatWeeks || 1) > 1 ? "／週" : ""}</span></div>
+              {isFilming ? (
+                <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>拍片</span><span>$0（唔扣堂數）</span></div>
+              ) : (
+                <>
+                  <div style={S.priceRow}><span>扣堂數</span><span>{bookModal.hours} 堂{(bookModal.repeatWeeks || 1) > 1 ? `（每週，最多扣 ${bookModal.hours * bookModal.repeatWeeks} 堂）` : ""}</span></div>
+                  <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>{isDuo ? "1對2 收費" : "1對1 收費"}</span><span>${price}{(bookModal.repeatWeeks || 1) > 1 ? "／週" : ""}</span></div>
+                </>
+              )}
             </div>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setBookModal(null)}>返回</button>

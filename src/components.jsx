@@ -6,7 +6,7 @@ import { S } from "./styles.js";
 export function EditCoachModal({ coach, onClose, onSave }) {
   const [form, setForm] = useState({
     id: coach.id, username: coach.username || "", name: coach.name, credits: coach.credits, rate: coach.rate, password: coach.password,
-    allowSolo: coach.allowSolo !== false, allowDuo: coach.allowDuo !== false, cancelWindowHours: coach.cancelWindowHours || 24,
+    allowSolo: coach.allowSolo !== false, allowDuo: coach.allowDuo !== false, allowFilming: coach.allowFilming === true, cancelWindowHours: coach.cancelWindowHours || 24,
   });
   return (
     <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320, textAlign: "left" }}>
@@ -20,6 +20,9 @@ export function EditCoachModal({ coach, onClose, onSave }) {
       <div style={S.checkRow}>
         <label style={S.checkLabel}><input type="checkbox" checked={form.allowSolo} onChange={(e) => setForm({ ...form, allowSolo: e.target.checked })} /> 允許一對一</label>
         <label style={S.checkLabel}><input type="checkbox" checked={form.allowDuo} onChange={(e) => setForm({ ...form, allowDuo: e.target.checked })} /> 允許一對二</label>
+      </div>
+      <div style={S.checkRow}>
+        <label style={S.checkLabel}><input type="checkbox" checked={form.allowFilming} onChange={(e) => setForm({ ...form, allowFilming: e.target.checked })} /> 允許拍片（其他冇呢個權限嘅教練會見唔到呢啲安排，當空格）</label>
       </div>
       <Field label="取消需管理員協助嘅時數（小時）"><input style={S.input} type="number" min="0" value={form.cancelWindowHours} onChange={(e) => setForm({ ...form, cancelWindowHours: parseInt(e.target.value) || 0 })} /></Field>
       {!coach.id && form.credits > 0 && <p style={S.amountPreview}>初始堂數記入流水帳：${(form.credits * form.rate).toLocaleString()}</p>}
