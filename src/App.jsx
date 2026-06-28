@@ -3,10 +3,14 @@ import * as XLSX from "xlsx";
 import { cloudEnabled, cloudLoad, cloudSave, cloudSubscribe, SUPABASE_URL } from "./supabase.js";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import {
-  LOGO, STAMP_PNG, DEFAULT_COACHES, DEFAULT_SUBADMINS, ADMIN_TAB_KEYS,
-  COLORS, MAX_CONCURRENT, DUO_BASE, DUO_HALF_HOUR_ADD, CHARTER_PRICE,
-  ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS, TIME_SLOTS, LS_KEY,
+  ADMIN_TAB_KEYS, COLORS, TIME_SLOTS, LS_KEY,
 } from "./constants.js";
+import {
+  BRAND_NAME, LOGO, STAMP_PNG, DEFAULT_COACHES, DEFAULT_SUBADMINS,
+  MAX_CONCURRENT, DUO_BASE, DUO_HALF_HOUR_ADD, CHARTER_PRICE,
+  ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS,
+  DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
+} from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
   stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
@@ -19,10 +23,11 @@ import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components
 export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
   const [currentUser, setCurrentUser] = useState(() => initialSession?.user || null);
-  const [adminPassword, setAdminPassword] = useState(() => persisted("adminPassword", "admin123"));
+  const [adminPassword, setAdminPassword] = useState(() => persisted("adminPassword", DEFAULT_ADMIN_PASSWORD));
   const [whatsappNumber, setWhatsappNumber] = useState(() => persisted("whatsappNumber", ""));
   const [venueNotice, setVenueNotice] = useState(() => persisted("venueNotice", ""));
   const [suggestionBox, setSuggestionBox] = useState(() => persisted("suggestionBox", []));
+  const [adminCalendarToken, setAdminCalendarToken] = useState(() => persisted("adminCalendarToken", ""));
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
   const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
@@ -39,6 +44,9 @@ export default function App() {
   const updateCalScale = (v) => { setCalScale(v); saveCalScale(v); };
   const [bookModal, setBookModal] = useState(null);   // { date, time }
   const [charterModal, setCharterModal] = useState(null); // admin charter { date, time, hours }
+  const [slotChoiceModal, setSlotChoiceModal] = useState(null); // { date, time } -> 揀「包場/小組」定「代教練book堂」
+  const [adminCoachBookModal, setAdminCoachBookModal] = useState(null); // admin 代教練 book 堂 { date, time, coachId, sessionType, hours, students }
+  const [copyInfoModal, setCopyInfoModal] = useState(null); // { text } 代book成功之後嘅複製文字
   const [charterLog, setCharterLog] = useState(() => persisted("charterLog", [])); // {date, bookDate, start, hours, amount}
   const [assistCancelLog, setAssistCancelLog] = useState(() => persisted("assistCancelLog", [])); // {coachId, month, date, start}
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
@@ -56,6 +64,7 @@ export default function App() {
     if (d.whatsappNumber !== undefined) setWhatsappNumber(d.whatsappNumber);
     if (d.venueNotice !== undefined) setVenueNotice(d.venueNotice);
     if (d.suggestionBox !== undefined) setSuggestionBox(d.suggestionBox);
+    if (d.adminCalendarToken !== undefined) setAdminCalendarToken(d.adminCalendarToken);
     if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
     if (d.studentPurchaseLog !== undefined) setStudentPurchaseLog(d.studentPurchaseLog);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
@@ -77,7 +86,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -96,7 +105,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -112,7 +121,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -264,6 +273,35 @@ export default function App() {
     setCharterLog((prev) => [{ date: new Date().toISOString().slice(0, 16).replace("T", " "), bookDate: date, start: time, hours, charterType, amount: amt, coachName: coachName || "" }, ...prev]);
     showToast(`已落${rentalFull(charterType)}（$${amt}）`);
     setCharterModal(null);
+  };
+
+  // Admin 代教練 book 堂：同教練自己 book 嘅邏輯一樣（扣嗰位教練嘅堂數），完成後生成一段文字畀 admin 自己複製去send
+  const confirmAdminCoachBooking = () => {
+    const { date, time, coachId, sessionType, hours, students } = adminCoachBookModal;
+    const coach = getCoach(coachId);
+    if (!coach) { showToast("請揀教練", "error"); return; }
+    const creditCost = hours;
+    const remain = coach.credits - coach.used;
+    if (creditCost > remain) { showToast(`${coach.name} 剩餘堂數不足`, "error"); return; }
+    const err = canPlace(date, time, hours);
+    if (err) { showToast(err, "error"); return; }
+    const price = sessionType === "duo" ? duoPrice(hours) : coach.rate * hours;
+    const rentalCost = coach.rate * hours;
+    const studentList = (students || []).filter(Boolean).slice(0, 4);
+    const coachRoster = getStudentRoster(coachId);
+    const studentCharges = {};
+    studentList.forEach((n) => { const s = coachRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
+    const entry = { coachId, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    setBookings((prev) => {
+      const u = { ...prev };
+      slotsFor(time, hours).forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
+      return u;
+    });
+    setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: c.used + creditCost } : c));
+    const summary = `你好 ${coach.name}，管理員已幫你預約：\n日期：${date}\n時間：${time}–${addMinutes(time, hours * 60)}\n類型：${sessionType === "duo" ? "1對2" : "1對1"}${studentList.length ? `\n學生：${studentList.join("、")}` : ""}`;
+    setAdminCoachBookModal(null);
+    setCopyInfoModal({ text: summary });
+    showToast("已代教練預約");
   };
 
   const openCancel = (date, start, coachId, type) => {
@@ -429,6 +467,20 @@ export default function App() {
   };
   const calendarFeedUrl = liveUser?.calendarToken ? `${SUPABASE_URL}/functions/v1/coach-calendar?token=${liveUser.calendarToken}` : "";
 
+  // Admin 自己嘅日曆同步（全場所有教練嘅 booking，連教練名都顯示）
+  const ensureAdminCalendarToken = () => {
+    if (adminCalendarToken) return adminCalendarToken;
+    const t = genToken();
+    setAdminCalendarToken(t);
+    return t;
+  };
+  const regenerateAdminCalendarToken = () => {
+    const t = genToken();
+    setAdminCalendarToken(t);
+    showToast("已重新生成連結，舊連結會失效");
+  };
+  const adminCalendarFeedUrl = adminCalendarToken ? `${SUPABASE_URL}/functions/v1/coach-calendar?adminToken=${adminCalendarToken}` : "";
+
   const submitSuggestion = (text) => {
     const t = text.trim();
     if (!t) return;
@@ -486,11 +538,11 @@ export default function App() {
   const sheetName = (s) => (s || "").replace(/[:\\/?*[\]]/g, " ").slice(0, 28).trim() || "Sheet";
   const fmtMoney = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // 生成購買堂數 Invoice（PDF），跟住 Gymily 提供嗰張範本排版；個性化資料（Bill to / Contact Person）留空，
+  // 生成購買堂數 Invoice（PDF），跟住公司提供嗰張範本排版；個性化資料（Bill to / Contact Person）留空，
   // 其他全部跟住教練同呢筆購買記錄自動帶入；公司印章自動貼上。
   const generateInvoicePDF = async (record) => {
     try {
-      const teal = rgb(0.067, 0.443, 0.478);
+      const teal = rgb(...INVOICE_THEME_RGB);
       const lightBlue = rgb(0.85, 0.91, 0.96);
       const grey = rgb(0.6, 0.6, 0.6);
       const black = rgb(0.1, 0.1, 0.1);
@@ -508,8 +560,8 @@ export default function App() {
       // ---- 頂部 teal header ----
       const headerH = 105;
       page.drawRectangle({ x: 0, y: height - headerH, width, height: headerH, color: teal });
-      page.drawText("Gymily Studio Limited", { x: rightX - bold.widthOfTextAtSize("Gymily Studio Limited", 13), y: height - 35, size: 13, font: bold, color: rgb(1, 1, 1) });
-      const addrLines = ["709,29-35,Sha Tsui Road ,Technology Plaza,Tsuen", "Wan, N.T"];
+      page.drawText(COMPANY_LEGAL_NAME, { x: rightX - bold.widthOfTextAtSize(COMPANY_LEGAL_NAME, 13), y: height - 35, size: 13, font: bold, color: rgb(1, 1, 1) });
+      const addrLines = COMPANY_ADDRESS_LINES;
       addrLines.forEach((line, i) => {
         page.drawText(line, { x: rightX - font.widthOfTextAtSize(line, 9), y: height - 50 - i * 12, size: 9, font, color: rgb(1, 1, 1) });
       });
@@ -521,7 +573,7 @@ export default function App() {
       page.drawText("Contact Person:", { x: marginX + 180, y, size: 9, font: bold, color: black });
 
       // ---- 右側：根據教練／購買記錄自動帶入 ----
-      const invoiceNo = `GM${String(new Date().getFullYear()).slice(2)}${String(invoiceCounter).padStart(4, "0")}`;
+      const invoiceNo = `${INVOICE_PREFIX}${String(new Date().getFullYear()).slice(2)}${String(invoiceCounter).padStart(4, "0")}`;
       const infoRows = [
         ["Client number :", `Coach-${record.coachName}`],
         ["Invoice number :", invoiceNo],
@@ -688,7 +740,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Gymily_資料備份_${today}.xlsx`;
+      a.download = `${BRAND_NAME}_資料備份_${today}.xlsx`;
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
@@ -760,7 +812,7 @@ export default function App() {
     return (
       <div style={S.loginBg}>
         <div style={S.loginCard}>
-          <img src={LOGO} alt="Gymily Studio" style={S.loginLogoImg} />
+          <img src={LOGO} alt={BRAND_NAME} style={S.loginLogoImg} />
           <p style={S.loginSub}>場地預約系統</p>
           <Field label="帳號名稱"><input style={S.input} placeholder=""
             value={loginForm.id} onChange={(e) => setLoginForm({ ...loginForm, id: e.target.value })}
@@ -1019,11 +1071,11 @@ export default function App() {
                                       </div>
                                     );
                                   })}
-                                  {canAdd && <button style={S.slotAdd} onClick={() => setCharterModal({ date, time, charterType: "trial", hours: 1, price: 0, coachName: "" })}>+</button>}
+                                  {canAdd && <button style={S.slotAdd} onClick={() => setSlotChoiceModal({ date, time })}>+</button>}
                                 </div>
                               ) : closed ? <div style={S.slotClosed} />
                                 : isPast ? <div style={S.slotPast} />
-                                : <button style={S.slotEmpty} onClick={() => setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "" })}>+</button>}
+                                : <button style={S.slotEmpty} onClick={() => setSlotChoiceModal({ date, time })}>+</button>}
                             </td>
                           );
                         })}
@@ -1234,6 +1286,29 @@ export default function App() {
                   <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
                 </div>
 
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
+                <div style={S.formCard}>
+                  {!cloudEnabled ? (
+                    <p style={{ ...S.bookingTime, lineHeight: 1.6 }}>呢個功能需要先開啟雲端同步。</p>
+                  ) : (
+                    <>
+                      <p style={{ ...S.bookingTime, marginBottom: 10, lineHeight: 1.6 }}>生成連結加入 Google／Apple Calendar,顯示全場所有教練嘅 booking(連教練名)。</p>
+                      {adminCalendarFeedUrl ? (
+                        <>
+                          <input style={{ ...S.input, fontSize: 11 }} readOnly value={adminCalendarFeedUrl} onFocus={(e) => e.target.select()} />
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            <button style={{ ...S.creditBtn, flex: 1 }} onClick={async () => { try { await navigator.clipboard.writeText(adminCalendarFeedUrl); showToast("已複製連結"); } catch (e) { showToast("複製失敗，請長按手動複製", "error"); } }}>📋 複製連結</button>
+                            <button style={{ ...S.smallBtn, flex: 1 }} onClick={regenerateAdminCalendarToken}>🔄 重新生成</button>
+                          </div>
+                          <p style={{ ...S.assistHint, marginTop: 8 }}>連結等於密碼，請唔好分享畀其他人。</p>
+                        </>
+                      ) : (
+                        <button style={S.loginBtn} onClick={ensureAdminCalendarToken}>生成同步連結</button>
+                      )}
+                    </>
+                  )}
+                </div>
+
                 <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
@@ -1423,6 +1498,88 @@ export default function App() {
           </div></div>
         )}
 
+        {slotChoiceModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>呢個時段想點落單？</h3>
+            <p style={S.modalText}>{slotChoiceModal.date}　{slotChoiceModal.time}</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button style={S.loginBtn} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setAdminCoachBookModal({ date, time, coachId: coaches[0]?.id || null, sessionType: "solo", hours: 1, students: [] }); }}>👤 代教練 Book 堂</button>
+              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff" }} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "" }); }}>🏟️ 包場／小組／試堂</button>
+            </div>
+            <button style={{ ...S.modalCancel, marginTop: 14, width: "100%" }} onClick={() => setSlotChoiceModal(null)}>取消</button>
+          </div></div>
+        )}
+
+        {adminCoachBookModal && (() => {
+          const selCoach = getCoach(adminCoachBookModal.coachId);
+          const roster = selCoach ? getStudentRoster(selCoach.id) : [];
+          const isDuo = adminCoachBookModal.sessionType === "duo";
+          const price = selCoach ? (isDuo ? duoPrice(adminCoachBookModal.hours) : selCoach.rate * adminCoachBookModal.hours) : 0;
+          const remain = selCoach ? selCoach.credits - selCoach.used : 0;
+          return (
+            <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
+              <h3 style={{ ...S.modalTitle, textAlign: "center" }}>代教練 Book 堂</h3>
+              <p style={{ ...S.modalText, textAlign: "center" }}>{adminCoachBookModal.date}　{adminCoachBookModal.time}</p>
+
+              <label style={S.label}>教練</label>
+              <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={adminCoachBookModal.coachId || ""}
+                onChange={(e) => setAdminCoachBookModal({ ...adminCoachBookModal, coachId: parseInt(e.target.value), students: [] })}>
+                {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}（剩 {c.credits - c.used} 堂）</option>)}
+              </select>
+
+              <label style={{ ...S.label, marginTop: 14 }}>類型</label>
+              <div style={S.segRow}>
+                <button style={!isDuo ? S.segActive : S.seg} onClick={() => setAdminCoachBookModal({ ...adminCoachBookModal, sessionType: "solo" })}>1對1</button>
+                <button style={isDuo ? S.segActive : S.seg} onClick={() => setAdminCoachBookModal({ ...adminCoachBookModal, sessionType: "duo" })}>1對2</button>
+              </div>
+
+              <label style={{ ...S.label, marginTop: 14 }}>時長</label>
+              <div style={S.segRow}>
+                <button style={adminCoachBookModal.hours === 1 ? S.segActive : S.seg} onClick={() => setAdminCoachBookModal({ ...adminCoachBookModal, hours: 1 })}>1 小時</button>
+                <button style={adminCoachBookModal.hours === 1.5 ? S.segActive : S.seg} onClick={() => setAdminCoachBookModal({ ...adminCoachBookModal, hours: 1.5 })}>1.5 小時</button>
+              </div>
+
+              {roster.length > 0 && (
+                <>
+                  <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位）</label>
+                  <div style={S.studentChipWrap}>
+                    {roster.map(({ name }) => {
+                      const sel = adminCoachBookModal.students.includes(name);
+                      const atMax = !sel && adminCoachBookModal.students.length >= 4;
+                      return (
+                        <button key={name} disabled={atMax} style={sel ? S.studentChipActive : atMax ? S.studentChipDisabled : S.studentChip}
+                          onClick={() => setAdminCoachBookModal({ ...adminCoachBookModal, students: sel ? adminCoachBookModal.students.filter((n) => n !== name) : [...adminCoachBookModal.students, name] })}>{name}</button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              <div style={S.priceBox}>
+                <div style={S.priceRow}><span>時段</span><span>{adminCoachBookModal.time} – {addMinutes(adminCoachBookModal.time, adminCoachBookModal.hours * 60)}</span></div>
+                <div style={S.priceRow}><span>扣堂數</span><span>{adminCoachBookModal.hours} 堂（{selCoach?.name} 剩 {remain} 堂）</span></div>
+                <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>收費</span><span>${price}</span></div>
+              </div>
+              <div style={S.modalBtns}>
+                <button style={S.modalCancel} onClick={() => setAdminCoachBookModal(null)}>返回</button>
+                <button style={S.modalConfirm} onClick={confirmAdminCoachBooking}>確認預約</button>
+              </div>
+            </div></div>
+          );
+        })()}
+
+        {copyInfoModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>預約成功</h3>
+            <p style={S.modalText}>複製落面文字，自行 send 畀教練（系統冇存教練電話，唔會自動發送）</p>
+            <textarea style={{ ...S.input, minHeight: 100, resize: "vertical", textAlign: "left" }} readOnly value={copyInfoModal.text} onFocus={(e) => e.target.select()} />
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setCopyInfoModal(null)}>關閉</button>
+              <button style={S.modalConfirm} onClick={async () => { try { await navigator.clipboard.writeText(copyInfoModal.text); showToast("已複製"); } catch (e) { showToast("複製失敗，請長按手動複製", "error"); } }}>📋 複製</button>
+            </div>
+          </div></div>
+        )}
+
         {adminCancelModal && (() => {
           const win = adminCancelModal.type !== "charter" ? (getCoach(adminCancelModal.coachId)?.cancelWindowHours ?? 24) : 24;
           const within24 = adminCancelModal.type !== "charter" && hoursUntil(adminCancelModal.date, adminCancelModal.start) < win;
@@ -1503,7 +1660,7 @@ export default function App() {
               <button style={S.modalCancel} onClick={() => setResetModal(false)}>返回</button>
               <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
                 try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
-                setCoaches(DEFAULT_COACHES); setAdminPassword("admin123"); setBookings({});
+                setCoaches(DEFAULT_COACHES); setAdminPassword(DEFAULT_ADMIN_PASSWORD); setBookings({});
                 setSubAdmins(DEFAULT_SUBADMINS);
                 setPurchaseLog([]); setCharterLog([]); setAssistCancelLog([]); setCancelLog([]);
                 setResetModal(false); showToast("已重設資料");
