@@ -75,10 +75,10 @@ export function SignaturePad({ studentName, onSave, onCancel }) {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    canvas.width = canvas.offsetWidth * 2; canvas.height = canvas.offsetHeight * 2;
+    // 用 1x 解析度（淨係夠簽名清晰，唔使 2x supersampling）：大幅縮細最終 PNG 檔案大細，減輕資料庫負擔
+    canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight;
     const ctx = canvas.getContext("2d");
-    ctx.scale(2, 2);
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.offsetWidth, canvas.offsetHeight);
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
   }, []);
 
   return (

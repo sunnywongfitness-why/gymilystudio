@@ -28,6 +28,7 @@ export default function App() {
   const [venueNotice, setVenueNotice] = useState(() => persisted("venueNotice", ""));
   const [suggestionBox, setSuggestionBox] = useState(() => persisted("suggestionBox", []));
   const [adminCalendarToken, setAdminCalendarToken] = useState(() => persisted("adminCalendarToken", ""));
+  const [signatureStore, setSignatureStore] = useState(() => persisted("signatureStore", {})); // 簽名圖獨立存一份，唔跟住 booking 喺每個15分鐘格重複
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
   const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
@@ -65,6 +66,7 @@ export default function App() {
     if (d.venueNotice !== undefined) setVenueNotice(d.venueNotice);
     if (d.suggestionBox !== undefined) setSuggestionBox(d.suggestionBox);
     if (d.adminCalendarToken !== undefined) setAdminCalendarToken(d.adminCalendarToken);
+    if (d.signatureStore !== undefined) setSignatureStore(d.signatureStore);
     if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
     if (d.studentPurchaseLog !== undefined) setStudentPurchaseLog(d.studentPurchaseLog);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
@@ -86,7 +88,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -105,7 +107,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -121,7 +123,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -361,12 +363,16 @@ export default function App() {
     const meta = startArr.find((e) => e.coachId === coachId && e.start === start && e.type === type);
     if (!meta) return;
     const slots = slotsFor(start, meta.hours);
+    const signedAt = new Date().toISOString().slice(0, 16).replace("T", " ");
+    const sigKey = `${coachId}_${date}_${start}_${studentName}`;
+    // 簽名圖（重嘅 base64 PNG）獨立存一份，唔再跟住 booking 喺每個15分鐘格重複存——大幅減少資料庫用量
+    setSignatureStore((prev) => ({ ...prev, [sigKey]: { dataUrl, signedAt } }));
     setBookings((prev) => {
       const u = { ...prev };
       slots.forEach((s) => {
         const arr = (u[`${date}_${s}`] || []).map((e) => {
           if (e.coachId === coachId && e.start === start && e.type === type) {
-            return { ...e, signatures: { ...(e.signatures || {}), [studentName]: { dataUrl, signedAt: new Date().toISOString().slice(0, 16).replace("T", " ") } } };
+            return { ...e, signatures: { ...(e.signatures || {}), [studentName]: signedAt } };
           }
           return e;
         });
@@ -506,11 +512,11 @@ export default function App() {
     showToast("密碼已更新");
   };
 
-  const addCredits = (coachId, qty, expiryDate) => {
+  const addCredits = (coachId, qty, date, expiryDate) => {
     const coach = getCoach(coachId);
     const amount = qty * coach.rate;
     setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, credits: c.credits + qty } : c));
-    setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: new Date().toISOString().slice(0, 10), coachId, coachName: coach.name, qty, amount, rate: coach.rate, expiryDate: expiryDate || null }, ...prev]);
+    setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: date || new Date().toISOString().slice(0, 10), coachId, coachName: coach.name, qty, amount, rate: coach.rate, expiryDate: expiryDate || null }, ...prev]);
     showToast(`已為 ${coach.name} 增加 ${qty} 堂（$${amount}）${expiryDate ? `，失效日：${expiryDate}` : ""}`);
   };
 
@@ -1106,7 +1112,7 @@ export default function App() {
                     <div style={S.bookingCoach}>{c.name} <span style={S.idTag}>@{c.username}</span></div>
                     <div style={S.bookingTime}>堂數 {c.used}/{c.credits}　每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
                   </div>
-                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, expiryDate: "" })}>+ 堂</button>
+                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "" })}>+ 堂</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
                 </div>
@@ -1416,11 +1422,12 @@ export default function App() {
             <h3 style={S.modalTitle}>增加堂數</h3>
             <p style={S.modalText}>{getCoach(addCreditModal.coachId)?.name}　每堂 ${getCoach(addCreditModal.coachId)?.rate}</p>
             <Field label="增加幾多堂"><input style={S.input} type="number" min="1" value={addCreditModal.qty} onChange={(e) => setAddCreditModal({ ...addCreditModal, qty: parseInt(e.target.value) || 1 })} /></Field>
+            <Field label="增加日期"><input style={S.input} type="date" value={addCreditModal.date || formatDate(new Date())} onChange={(e) => setAddCreditModal({ ...addCreditModal, date: e.target.value })} /></Field>
             <Field label="失效日期（留空＝無限期）"><input style={S.input} type="date" value={addCreditModal.expiryDate || ""} onChange={(e) => setAddCreditModal({ ...addCreditModal, expiryDate: e.target.value })} /></Field>
             <p style={S.amountPreview}>金額：${((getCoach(addCreditModal.coachId)?.rate || 0) * addCreditModal.qty).toLocaleString()}</p>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setAddCreditModal(null)}>取消</button>
-              <button style={S.modalConfirm} onClick={() => { addCredits(addCreditModal.coachId, addCreditModal.qty, addCreditModal.expiryDate); setAddCreditModal(null); }}>確認增加</button>
+              <button style={S.modalConfirm} onClick={() => { addCredits(addCreditModal.coachId, addCreditModal.qty, addCreditModal.date, addCreditModal.expiryDate); setAddCreditModal(null); }}>確認增加</button>
             </div>
           </div></div>
         )}
