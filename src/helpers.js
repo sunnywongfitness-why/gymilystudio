@@ -49,20 +49,36 @@ export function duoPrice(hours) { return DUO_BASE + Math.round((hours - 1) / 0.5
 export const isWholeVenue = (e) => e.type === "charter" && e.charterType !== "trial";
 export const rentalShort = (ct) => ct === "group" ? "小組" : ct === "trial" ? "試堂" : ct === "clean" ? "清潔" : ct === "filming" ? "拍片" : "包場";
 export const rentalFull = (ct) => ct === "group" ? "小組訓練" : ct === "trial" ? "試堂" : ct === "clean" ? "封場清潔" : ct === "filming" ? "拍片" : "私人包場";
+// 第12項：將 cancelledBy/addedBy 呢類操作者標記，轉做人睇得明嘅文字（subadmin 會顯示返實際姓名）
+export function actorLabel(v) {
+  if (!v) return "";
+  if (v === "coach") return "教練自行取消";
+  if (v === "admin") return "管理員代取消";
+  if (typeof v === "string" && v.startsWith("subadmin:")) return `副管理員代取消（${v.slice(9)}）`;
+  return v;
+}
 export const isClosedDay = (date) => CLOSED_DAYS.includes(new Date(`${date}T00:00:00`).getDay());
+// 教練顏色自動派：根據 coachId 用黃金角 hash 一個 HSL 色相，固定飽和度/明度，可以無限擴展、相鄰ID易分辨、零人手介入
+export function coachColorFromId(id) {
+  const hue = (Number(id) * 137.508) % 360;
+  return `hsl(${hue.toFixed(0)}, 65%, 60%)`;
+}
 
-// 15-min grid 07:00–22:00
+// 固定一週：星期日=第一日、星期六=第七日（唔再係「今日之後7日」嘅 rolling window）
 export function getDaysOfWeek(offset = 0) {
   const days = [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  today.setDate(today.getDate() + offset);
-  for (let i = 0; i < 7; i++) { const d = new Date(today); d.setDate(today.getDate() + i); days.push(d); }
+  const sunday = new Date(today);
+  sunday.setDate(today.getDate() - today.getDay()); // 今個禮拜嘅星期日
+  sunday.setDate(sunday.getDate() + offset); // offset 已經係 weekOffset*7，指定去第幾個禮拜
+  for (let i = 0; i < 7; i++) { const d = new Date(sunday); d.setDate(sunday.getDate() + i); days.push(d); }
   return days;
 }
 export const pad2 = (n) => String(n).padStart(2, "0");
 export const formatDate = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 export const addDaysToDate = (dateStr, days) => { const d = new Date(`${dateStr}T00:00:00`); d.setDate(d.getDate() + days); return formatDate(d); };
+export const addMonthsToDate = (dateStr, months) => { const d = new Date(`${dateStr}T00:00:00`); d.setMonth(d.getMonth() + months); return formatDate(d); };
 export const isTodayDate = (date) => formatDate(date) === formatDate(new Date());
 export const formatDay = (date) => `周${["日", "一", "二", "三", "四", "五", "六"][date.getDay()]}`;
 export const monthKey = (dateStr) => dateStr.slice(0, 7);

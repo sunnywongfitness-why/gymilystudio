@@ -3,18 +3,42 @@ import { useState, useRef, useEffect } from "react";
 import { LOGO, BRAND_NAME } from "./brand.js";
 import { S } from "./styles.js";
 
-export function EditCoachModal({ coach, onClose, onSave }) {
+const ONBOARDING_STEPS = [
+  { key: "fee", label: "① 收費表", tracked: false },
+  { key: "guide", label: "② 場地守則", tracked: false },
+  { key: "payment", label: "③ 付款資訊", tracked: true },
+  { key: "welcome", label: "④ 歡迎訊息", tracked: true },
+  { key: "rental", label: "⑤ 租場須知", tracked: true },
+  { key: "terms", label: "⑥ 使用條款", tracked: true },
+];
+
+export function EditCoachModal({ coach, onClose, onSave, onOnboardingSend }) {
   const [form, setForm] = useState({
     id: coach.id, username: coach.username || "", name: coach.name, credits: coach.credits, rate: coach.rate, password: coach.password,
-    allowSolo: coach.allowSolo !== false, allowDuo: coach.allowDuo !== false, allowFilming: coach.allowFilming === true, cancelWindowHours: coach.cancelWindowHours || 24,
+    allowSolo: coach.allowSolo !== false, allowDuo: coach.allowDuo !== false, allowFilming: coach.allowFilming === true, cancelWindowHours: coach.cancelWindowHours ?? 24,
+    phone: coach.phone || "", initialPassHours: coach.initialPassHours ?? "",
   });
+  const [onboardingStatus, setOnboardingStatus] = useState(coach.onboardingStatus || { payment: false, welcome: false, rental: false, terms: false });
+  const save = () => {
+    if (!form.name.trim()) return;
+    onSave({ ...form, credits: Number(form.credits) || 0, rate: Number(form.rate) || 0, cancelWindowHours: Number(form.cancelWindowHours) || 0, initialPassHours: form.initialPassHours === "" ? null : Number(form.initialPassHours) });
+  };
+  const trackedSteps = ONBOARDING_STEPS.filter((s) => s.tracked);
+  const sentCount = trackedSteps.filter((s) => onboardingStatus[s.key]).length;
+  const handleSend = (step) => {
+    if (!onOnboardingSend) return;
+    const ok = onOnboardingSend(step.key, form.name, form.initialPassHours, form.phone);
+    if (ok === false) return; // 例如③未輸入初始Pass時數
+    if (step.tracked) setOnboardingStatus((prev) => ({ ...prev, [step.key]: true }));
+  };
   return (
     <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320, textAlign: "left" }}>
       <h3 style={S.modalTitle}>{coach.id ? "編輯教練" : "新增教練"}</h3>
       <Field label="教練全名（顯示用）"><input style={S.input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
       <Field label="登入帳號名稱"><input style={S.input} value={form.username} placeholder="例如 alex（登入用，不分大小寫）" onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
-      <Field label={coach.id ? "總購買堂數" : "初始購買堂數"}><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: parseInt(e.target.value) || 0 })} /></Field>
-      <Field label="一對一每堂租金 ($)"><input style={S.input} type="number" value={form.rate} onChange={(e) => setForm({ ...form, rate: parseInt(e.target.value) || 0 })} /></Field>
+      <Field label="電話號碼（admin專用，教練自己睇唔到，方便send WhatsApp）"><input style={S.input} value={form.phone} placeholder="例如 85291234567" onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^0-9]/g, "") })} /></Field>
+      <Field label={coach.id ? "總購買堂數" : "初始購買堂數"}><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: e.target.value })} /></Field>
+      <Field label="一對一每堂租金 ($)"><input style={S.input} type="number" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} /></Field>
       <Field label="密碼"><input style={S.input} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
       <label style={S.label}>預約權限</label>
       <div style={S.checkRow}>
@@ -24,11 +48,32 @@ export function EditCoachModal({ coach, onClose, onSave }) {
       <div style={S.checkRow}>
         <label style={S.checkLabel}><input type="checkbox" checked={form.allowFilming} onChange={(e) => setForm({ ...form, allowFilming: e.target.checked })} /> 允許拍片（其他冇呢個權限嘅教練會見唔到呢啲安排，當空格）</label>
       </div>
-      <Field label="取消需管理員協助嘅時數（小時）"><input style={S.input} type="number" min="0" value={form.cancelWindowHours} onChange={(e) => setForm({ ...form, cancelWindowHours: parseInt(e.target.value) || 0 })} /></Field>
-      {!coach.id && form.credits > 0 && <p style={S.amountPreview}>初始堂數記入流水帳：${(form.credits * form.rate).toLocaleString()}</p>}
+      <Field label="取消需管理員協助嘅時數（小時）"><input style={S.input} type="number" min="0" value={form.cancelWindowHours} onChange={(e) => setForm({ ...form, cancelWindowHours: e.target.value })} /></Field>
+      {!coach.id && Number(form.credits) > 0 && <p style={S.amountPreview}>初始堂數記入流水帳：${((Number(form.credits) || 0) * (Number(form.rate) || 0)).toLocaleString()}</p>}
+
+      <Field label="初始 Pass 時數（用嚟生成③付款資訊，可留空）"><input style={S.input} type="number" step="0.5" min="0" value={form.initialPassHours} onChange={(e) => setForm({ ...form, initialPassHours: e.target.value })} /></Field>
+
+      {coach.id && (
+        <div style={{ marginTop: 14, padding: 10, background: "#141414", borderRadius: 10 }}>
+          <div style={{ ...S.flexBetween, marginBottom: 8 }}>
+            <span style={S.label}>Onboarding</span>
+            <span style={{ fontSize: 11, color: "#888" }}>已send {sentCount} / {trackedSteps.length}</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {ONBOARDING_STEPS.map((step) => (
+              <button key={step.key} style={{ ...S.smallBtn, background: step.tracked && onboardingStatus[step.key] ? "#1d3d2a" : undefined, color: step.tracked && onboardingStatus[step.key] ? "#6BCB77" : undefined }}
+                onClick={() => handleSend(step)}>
+                {step.label}{step.tracked && onboardingStatus[step.key] ? " ✓" : ""}
+              </button>
+            ))}
+          </div>
+          {!form.phone && <p style={{ ...S.assistHint, marginTop: 6 }}>未填電話號碼，撳掣會純粹生成文字畀你複製（唔會自動開 WhatsApp）。</p>}
+        </div>
+      )}
+
       <div style={S.modalBtns}>
         <button style={S.modalCancel} onClick={onClose}>取消</button>
-        <button style={S.modalConfirm} onClick={() => { if (!form.name.trim()) return; onSave(form); }}>儲存</button>
+        <button style={S.modalConfirm} onClick={save}>儲存</button>
       </div>
     </div></div>
   );
@@ -85,7 +130,7 @@ export function SignaturePad({ studentName, onSave, onCancel }) {
   }, []);
 
   return (
-    <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320 }}>
+    <div style={S.modalOverlay}><div style={{ ...S.modal, width: "min(92vw, 420px)" }}>
       <h3 style={S.modalTitle}>學生簽到</h3>
       <p style={S.modalText}>{studentName}　請喺下面簽名作實</p>
       <canvas ref={canvasRef} style={S.signCanvas}
