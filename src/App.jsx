@@ -3190,7 +3190,7 @@ export default function App() {
             </div>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setBookModal(null)}>返回</button>
-              <button style={S.modalConfirm} onClick={confirmBook}>確認預約</button>
+              <button style={S.modalConfirm} onClick={() => confirmBook()}>確認預約</button>
             </div>
           </div></div>
         );
