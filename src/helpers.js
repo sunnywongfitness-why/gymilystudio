@@ -65,14 +65,25 @@ export function coachColorFromId(id) {
 }
 
 // 固定一週：星期日=第一日、星期六=第七日（唔再係「今日之後7日」嘅 rolling window）
-export function getDaysOfWeek(offset = 0) {
+// mode: "fixed"（固定星期一至日，offset 為 7 嘅倍數） | "rolling"（以今日做第一日，offset 為任意日數）
+export function getDaysOfWeek(offset = 0, mode = "fixed") {
   const days = [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const sunday = new Date(today);
-  sunday.setDate(today.getDate() - today.getDay()); // 今個禮拜嘅星期日
-  sunday.setDate(sunday.getDate() + offset); // offset 已經係 weekOffset*7，指定去第幾個禮拜
-  for (let i = 0; i < 7; i++) { const d = new Date(sunday); d.setDate(sunday.getDate() + i); days.push(d); }
+  if (mode === "rolling") {
+    // Rolling 模式：每次「上週/下週」都係 ±7 日，但永遠以「今日 + offset」做第一日
+    const start = new Date(today);
+    start.setDate(today.getDate() + offset);
+    for (let i = 0; i < 7; i++) { const d = new Date(start); d.setDate(start.getDate() + i); days.push(d); }
+    return days;
+  }
+  // Fixed 模式：固定星期一到星期日
+  const monday = new Date(today);
+  const dow = today.getDay(); // 0=日 1=一 ... 6=六
+  const diffToMonday = dow === 0 ? -6 : 1 - dow; // 今日距返本週一嘅日數
+  monday.setDate(today.getDate() + diffToMonday);
+  monday.setDate(monday.getDate() + offset); // offset 已經係 weekOffset*7，指定去第幾個禮拜
+  for (let i = 0; i < 7; i++) { const d = new Date(monday); d.setDate(monday.getDate() + i); days.push(d); }
   return days;
 }
 export const pad2 = (n) => String(n).padStart(2, "0");

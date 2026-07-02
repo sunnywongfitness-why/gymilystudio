@@ -37,7 +37,14 @@ export function EditCoachModal({ coach, onClose, onSave, onOnboardingSend }) {
       <Field label="教練全名（顯示用）"><input style={S.input} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
       <Field label="登入帳號名稱"><input style={S.input} value={form.username} placeholder="例如 alex（登入用，不分大小寫）" onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
       <Field label="電話號碼（admin專用，教練自己睇唔到，方便send WhatsApp）"><input style={S.input} value={form.phone} placeholder="例如 85291234567" onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^0-9]/g, "") })} /></Field>
-      <Field label={coach.id ? "總購買堂數" : "初始購買堂數"}><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: e.target.value })} /></Field>
+      {coach.id ? (
+        <Field label="總購買堂數"><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: e.target.value })} /></Field>
+      ) : (
+        <>
+          <Field label="初始購買時數（小時）— 會自動計入總時數"><input style={S.input} type="number" step="0.5" min="0" value={form.initialPassHours} onChange={(e) => setForm({ ...form, initialPassHours: e.target.value, credits: e.target.value })} /></Field>
+          {Number(form.initialPassHours) > 0 && <p style={S.amountPreview}>將記入總時數：{Number(form.initialPassHours)} 小時（按 Training Pass $100/小時計，僅供參考，實際以教練買 Pass 記錄為準）</p>}
+        </>
+      )}
       <Field label="一對一每堂租金 ($)"><input style={S.input} type="number" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} /></Field>
       <Field label="密碼"><input style={S.input} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></Field>
       <label style={S.label}>預約權限</label>
@@ -49,9 +56,8 @@ export function EditCoachModal({ coach, onClose, onSave, onOnboardingSend }) {
         <label style={S.checkLabel}><input type="checkbox" checked={form.allowFilming} onChange={(e) => setForm({ ...form, allowFilming: e.target.checked })} /> 允許拍片（其他冇呢個權限嘅教練會見唔到呢啲安排，當空格）</label>
       </div>
       <Field label="取消需管理員協助嘅時數（小時）"><input style={S.input} type="number" min="0" value={form.cancelWindowHours} onChange={(e) => setForm({ ...form, cancelWindowHours: e.target.value })} /></Field>
-      {!coach.id && Number(form.credits) > 0 && <p style={S.amountPreview}>初始堂數記入流水帳：${((Number(form.credits) || 0) * (Number(form.rate) || 0)).toLocaleString()}</p>}
 
-      <Field label="初始 Pass 時數（用嚟生成③付款資訊，可留空）"><input style={S.input} type="number" step="0.5" min="0" value={form.initialPassHours} onChange={(e) => setForm({ ...form, initialPassHours: e.target.value })} /></Field>
+      {coach.id && Number(form.credits) > 0 && <p style={S.amountPreview}>總時數：{Number(form.credits)} 小時</p>}
 
       {coach.id && (
         <div style={{ marginTop: 14, padding: 10, background: "#141414", borderRadius: 10 }}>

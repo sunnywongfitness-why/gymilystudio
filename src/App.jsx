@@ -11,7 +11,7 @@ import {
   ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS,
   DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
   PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS, SHARED_PASS_HOURS, SHARED_PASS_MONTHS,
-  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText,
+  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText, retroactiveBookingReminderText,
 } from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
@@ -33,6 +33,7 @@ export default function App() {
   const [adminCalendarToken, setAdminCalendarToken] = useState(() => persisted("adminCalendarToken", ""));
   const [signatureStore, setSignatureStore] = useState(() => persisted("signatureStore", {})); // 簽名圖獨立存一份，唔跟住 booking 喺每個15分鐘格重複
   const [filmingNotices, setFilmingNotices] = useState(() => persisted("filmingNotices", [])); // 拍片被頂走嘅通知
+  const [retroBookingNotices, setRetroBookingNotices] = useState(() => persisted("retroBookingNotices", [])); // 第6項：Admin通知教練「已上堂但未book返」，教練首頁banner顯示，可撳入去補book
   const [passUsageLog, setPassUsageLog] = useState(() => persisted("passUsageLog", [])); // {id, coachId, date, hours, passType, sessionType} 教練自己book堂扣Pass時數嘅記錄，用嚟計「個人證」呢類受限類型仲剩幾多
   const [sharedPasses, setSharedPasses] = useState(() => persisted("sharedPasses", [])); // {id, totalHours, usedHours, purchaseDate, expiryDate, coachIds:[id1,id2], usageByCoach:{[id]:hours}} 共享訓練通行證
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
@@ -46,6 +47,7 @@ export default function App() {
   const [ledgerMonth, setLedgerMonth] = useState("all"); // "all" or "YYYY-MM"
   const [editDateRec, setEditDateRec] = useState(null); // {id, date}
   const [weekOffset, setWeekOffset] = useState(0);
+  const [weekViewMode, setWeekViewMode] = useState("fixed"); // fixed（星期一至日） | rolling（以今日做第一日）— 第3項：兩個模式並存，一鍵切換
   const [calScale, setCalScale] = useState(() => loadCalScale());
   const [myBookingsView, setMyBookingsView] = useState("list"); // list | calendar
   const [myBookingsSortMode, setMyBookingsSortMode] = useState("newest"); // newest | closest（距今日最近排最頂）
@@ -56,6 +58,9 @@ export default function App() {
   const [slotChoiceModal, setSlotChoiceModal] = useState(null); // { date, time } -> 揀「包場/小組」定「代教練book堂」
   const [adminCoachBookModal, setAdminCoachBookModal] = useState(null); // admin 代教練 book 堂 { date, time, coachId, sessionType, hours, students }
   const [copyInfoModal, setCopyInfoModal] = useState(null); // { text } 代book成功之後嘅複製文字
+  const [retroReminderModal, setRetroReminderModal] = useState(null); // 第6項：Admin發起「補book提醒」揀日期時間 { coachId, coachName, date, start, hours }
+  const [retroBookModal, setRetroBookModal] = useState(null); // 第6項：教練撳banner後嘅補book表格 { noticeId, date, start, hours, sessionType, students }
+  const [quickBook, setQuickBook] = useState({ date: "", start: "19:00", hours: 1, sessionType: "solo", students: [], studentOther: "" }); // 快速Book表格（首頁表格式輸入，取代/補充grid點格仔），淨係教練自己book用
   const [charterLog, setCharterLog] = useState(() => persisted("charterLog", [])); // {date, bookDate, start, hours, amount}
   const [assistCancelLog, setAssistCancelLog] = useState(() => persisted("assistCancelLog", [])); // {coachId, month, date, start}
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
@@ -77,6 +82,7 @@ export default function App() {
     if (d.adminCalendarToken !== undefined) setAdminCalendarToken(d.adminCalendarToken);
     if (d.signatureStore !== undefined) setSignatureStore(d.signatureStore);
     if (d.filmingNotices !== undefined) setFilmingNotices(d.filmingNotices);
+    if (d.retroBookingNotices !== undefined) setRetroBookingNotices(d.retroBookingNotices);
     if (d.passUsageLog !== undefined) setPassUsageLog(d.passUsageLog);
     if (d.sharedPasses !== undefined) setSharedPasses(d.sharedPasses);
     if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
@@ -100,7 +106,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -119,7 +125,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -135,7 +141,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -170,7 +176,7 @@ export default function App() {
   const [delCoachModal, setDelCoachModal] = useState(null); // coach pending deletion
   const [showPasswords, setShowPasswords] = useState(false);
 
-  const days = getDaysOfWeek(weekOffset * 7);
+  const days = getDaysOfWeek(weekOffset * 7, weekViewMode);
   const showToast = (msg, type = "success") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
   const getCoach = (id) => coaches.find((c) => c.id === id);
 
@@ -278,17 +284,19 @@ export default function App() {
     setBookModal(null);
   };
 
-  const confirmBook = () => {
-    const { date, time, sessionType, hours } = bookModal;
+  // src 可傳入覆蓋用嘅booking資料（快速Book表格用），唔傳就用返 bookModal（原本grid點格仔流程，行為完全冇改）
+  const confirmBook = (src) => {
+    const m = src || bookModal;
+    const { date, time, sessionType, hours } = m;
     if (sessionType === "filming") return confirmFilmingBooking();
     if (sessionType === "solo" && liveUser.allowSolo === false) { showToast("你冇一對一預約權限", "error"); return; }
     if (sessionType === "duo" && liveUser.allowDuo === false) { showToast("你冇一對二預約權限", "error"); return; }
     const passCost = sessionType === "duo" ? hours + 0.5 : hours; // 第9項 Training Pass：1對2 喺原定時長之上，額外多扣0.5小時
     const price = passCost * 100; // Training Pass：買咗Pass之後一律 $100/小時計算（唔理solo/duo）
     const rentalCost = price; // Pass制下，收費即係租場成本，冇再獨立計
-    const repeatWeeks = Math.max(1, bookModal.repeatWeeks || 1);
-    const selected = Array.isArray(bookModal.students) ? bookModal.students : [];
-    const extra = (bookModal.studentOther || "").trim();
+    const repeatWeeks = Math.max(1, m.repeatWeeks || 1);
+    const selected = Array.isArray(m.students) ? m.students : [];
+    const extra = (m.studentOther || "").trim();
     const studentList = [...selected, ...(extra ? [extra] : [])].filter(Boolean).slice(0, 4);
     const studentCharges = {};
     studentList.forEach((n) => { const s = myRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
@@ -362,6 +370,71 @@ export default function App() {
     setBookModal(null);
   };
 
+  // 第6項：Admin發起「補book提醒」——揀返教練漏book嘅日期時間，寫入 retroBookingNotices（教練首頁banner會顯示），
+  // 有電話就直接開WhatsApp，冇電話就fallback去copyInfoModal俾admin自己copy
+  const sendRetroReminder = () => {
+    const { coachId, coachName, date, start, hours } = retroReminderModal;
+    if (!date || !start || !hours) { showToast("請填晒日期／時間／時長", "error"); return; }
+    const end = addMinutes(start, Number(hours) * 60);
+    const notice = { id: "rb" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId, date, start, hours: Number(hours), read: false, createdAt: new Date().toISOString() };
+    setRetroBookingNotices((prev) => [notice, ...prev]);
+    const text = retroactiveBookingReminderText(coachName, date, start, end);
+    const coach = getCoach(coachId);
+    if (coach?.phone) {
+      window.open(`https://wa.me/${coach.phone}?text=${encodeURIComponent(text)}`, "_blank");
+    } else {
+      setCopyInfoModal({ title: "提醒教練補book堂", text });
+    }
+    showToast("已發送補book提醒");
+    setRetroReminderModal(null);
+  };
+
+  // 第6項：教練撳首頁banner後嘅補book——跟confirmBook同一套Pass分配邏輯（個人證優先→彈性→共享），但淨係單一時段、唔重複
+  // 過去時段都要做完整衝突檢查（如果嗰時段已經俾第二個教練book咗，要擋住畀admin人手處理）
+  const confirmRetroBooking = () => {
+    const { noticeId, date, start, hours, sessionType } = retroBookModal;
+    if (sessionType === "solo" && liveUser.allowSolo === false) { showToast("你冇一對一預約權限", "error"); return; }
+    if (sessionType === "duo" && liveUser.allowDuo === false) { showToast("你冇一對二預約權限", "error"); return; }
+    const err = canPlace(date, start, hours, 1, currentUser.id);
+    if (err) { showToast(`呢個時段${err}，請聯絡Admin處理`, "error"); return; }
+    const passCost = sessionType === "duo" ? hours + 0.5 : hours;
+    const price = passCost * 100;
+    const rentalCost = price;
+    const selected = Array.isArray(retroBookModal.students) ? retroBookModal.students : [];
+    const extra = (retroBookModal.studentOther || "").trim();
+    const studentList = [...selected, ...(extra ? [extra] : [])].filter(Boolean).slice(0, 4);
+    const studentCharges = {};
+    studentList.forEach((n) => { const s = myRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
+
+    const personalLeft = personalRemaining(currentUser.id);
+    const flexibleLeft = flexibleRemaining(currentUser.id);
+    let dedu = null;
+    if (sessionType === "solo" && personalLeft >= passCost) dedu = { pool: "personal", amount: passCost };
+    else if (flexibleLeft >= passCost) dedu = { pool: "flexible", amount: passCost };
+    else {
+      const sp = sharedPassesOf(currentUser.id).find((s) => sharedRemaining(s) >= passCost);
+      if (sp) dedu = { pool: "shared", sharedId: sp.id, amount: passCost };
+    }
+    if (!dedu) { showToast("Pass時數不足，請聯絡Admin增購", "error"); return; }
+    const logId = "pu" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    dedu.id = logId;
+    const entry = {
+      coachId: currentUser.id, start, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges,
+      passPool: dedu.pool, passCost: dedu.amount, passLogId: dedu.pool !== "shared" ? logId : null, sharedPassId: dedu.pool === "shared" ? dedu.sharedId : null,
+      isRetroactive: true, // 第6項：標記呢個係事後補記錄，方便Admin流水帳分辨
+      createdAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+    };
+    setBookings((prev) => {
+      const u = { ...prev };
+      slotsFor(start, hours).forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
+      return u;
+    });
+    commitPassDeduction(currentUser.id, sessionType, [dedu]);
+    if (noticeId) setRetroBookingNotices((prev) => prev.map((n) => n.id === noticeId ? { ...n, read: true } : n));
+    showToast("已補返記錄！");
+    setRetroBookModal(null);
+  };
+
   // ADMIN: place a rental (包場/小組=全場2位, 試堂=1位), price editable
   const confirmCharter = () => {
     const { date, time, charterType, price, coachName } = charterModal;
@@ -369,18 +442,50 @@ export default function App() {
     if (hours <= 0) { showToast("請輸入有效時長", "error"); return; }
     if (isClosedDay(date)) { showToast("休息日", "error"); return; }
     const need = charterType === "trial" ? 1 : MAX_CONCURRENT;
-    const err = canPlace(date, time, hours, need);
-    if (err) { showToast(err, "error"); return; }
     const amt = ["trial", "clean"].includes(charterType) ? 0 : (parseInt(price) || 0);
-    const slots = slotsFor(time, hours);
-    const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const repeatWeeks = charterType === "clean" ? Math.max(1, charterModal.repeatWeeks || 1) : 1;
+
+    if (repeatWeeks === 1) {
+      const err = canPlace(date, time, hours, need);
+      if (err) { showToast(err, "error"); return; }
+      const slots = slotsFor(time, hours);
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      setBookings((prev) => {
+        const u = { ...prev };
+        slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
+        return u;
+      });
+      setCharterLog((prev) => [{ date: new Date().toISOString().slice(0, 16).replace("T", " "), bookDate: date, start: time, hours, charterType, amount: amt, coachName: coachName || "" }, ...prev]);
+      showToast(`已落${rentalFull(charterType)}（$${amt}）`);
+      setCharterModal(null);
+      return;
+    }
+
+    // 清潔可重複book固定時間（第5項）：跟返 bookModal 每週重複嘅 skip-on-conflict 模式，某一週撞咗就跳過，唔影響其他週
+    const newBookingsBySlot = {};
+    const logsToAdd = [];
+    let okCount = 0, skippedDates = [];
+    for (let w = 0; w < repeatWeeks; w++) {
+      const wDate = w === 0 ? date : addDaysToDate(date, w * 7);
+      const err = canPlace(wDate, time, hours, need);
+      if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
+      const wSlots = slotsFor(time, hours);
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      wSlots.forEach((s) => {
+        const key = `${wDate}_${s}`;
+        newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
+      });
+      logsToAdd.push({ date: new Date().toISOString().slice(0, 16).replace("T", " "), bookDate: wDate, start: time, hours, charterType, amount: amt, coachName: coachName || "" });
+      okCount++;
+    }
+    if (okCount === 0) { showToast(skippedDates[0] || "預約失敗", "error"); return; }
     setBookings((prev) => {
       const u = { ...prev };
-      slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
+      Object.entries(newBookingsBySlot).forEach(([key, arr]) => { u[key] = [...(u[key] || []), ...arr]; });
       return u;
     });
-    setCharterLog((prev) => [{ date: new Date().toISOString().slice(0, 16).replace("T", " "), bookDate: date, start: time, hours, charterType, amount: amt, coachName: coachName || "" }, ...prev]);
-    showToast(`已落${rentalFull(charterType)}（$${amt}）`);
+    setCharterLog((prev) => [...logsToAdd, ...prev]);
+    showToast(skippedDates.length === 0 ? `已成功預約 ${okCount} 週清潔` : `已預約 ${okCount} 週清潔，跳過 ${skippedDates.length} 週：${skippedDates.join("、")}`);
     setCharterModal(null);
   };
 
@@ -1112,12 +1217,15 @@ export default function App() {
     });
   });
   myBookings.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
-  // 「距今日最近」排序：純粹按日期同今日嘅距離（唔理過去定未來），唔涉及完成/簽到狀態
+  // 「距今日最近」排序：未來（包括今日）優先，由近到遠；之後先至到過去嘅日子，由最近至最舊
+  // 修正前 bug：用 Math.abs() 計距離令過去同未來平等，導致已完成嘅過去日子跑咗上最頂
   const myBookingsSorted = (() => {
     if (myBookingsSortMode !== "closest") return myBookings;
     const todayMs = new Date(`${formatDate(new Date())}T00:00:00`).getTime();
-    const dist = (d) => Math.abs(new Date(`${d}T00:00:00`).getTime() - todayMs);
-    return [...myBookings].sort((a, b) => dist(a.date) - dist(b.date));
+    const dayMs = (d) => new Date(`${d}T00:00:00`).getTime();
+    const future = myBookings.filter((b) => dayMs(b.date) >= todayMs).sort((a, b) => dayMs(a.date) - dayMs(b.date));
+    const past = myBookings.filter((b) => dayMs(b.date) < todayMs).sort((a, b) => dayMs(b.date) - dayMs(a.date));
+    return [...future, ...past];
   })();
 
   // 教練近3個月實際收入（只計有填學生名嘅堂，用 snapshot 收費；扣除租場費用）+ 各學生上堂紀錄（近3個月）
@@ -1378,6 +1486,7 @@ export default function App() {
               <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
               <button style={S.navBtn} onClick={() => setWeekOffset(0)}>今日</button>
               <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
+              <button style={S.navBtn} onClick={() => { setWeekViewMode((m) => m === "fixed" ? "rolling" : "fixed"); setWeekOffset(0); }} title="切換週視圖模式">🔁 {weekViewMode === "fixed" ? "一至日" : "今日起"}</button>
             </div>
             <div style={S.calScroll}>
               <table style={S.table}>
@@ -1474,7 +1583,7 @@ export default function App() {
                     })()}
                   </div>
                   <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 堂</button>
-                  <button style={S.smallBtn} onClick={() => setCopyInfoModal({ title: "提醒教練補book堂", text: `${c.name}，你好！我哋留意到你可能有堂已經完成，但未喺系統入面 book 返，麻煩補返個記錄，方便計算堂數同流水帳，多謝晒！` })}>⚠️ 提醒</button>
+                  <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00", hours: 1 })}>⚠️ 提醒補book</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
                 </div>
@@ -1954,6 +2063,17 @@ export default function App() {
               {coaches.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
 
+            {charterModal.charterType === "clean" && (
+              <>
+                <label style={{ ...S.label, marginTop: 14 }}>每週重複（同一星期幾、同一時間）</label>
+                <div style={S.segRow}>
+                  {[1, 4, 8, 12].map((w) => (
+                    <button key={w} style={(charterModal.repeatWeeks || 1) === w ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, repeatWeeks: w })}>{w === 1 ? "唔重複" : `${w}週`}</button>
+                  ))}
+                </div>
+                {(charterModal.repeatWeeks || 1) > 1 && <p style={S.assistHint}>會一次過幫你book未來 {charterModal.repeatWeeks} 個星期嘅同一個清潔時段；如果某一週已經被佔用，會自動跳過嗰一週，唔影響其他週。</p>}
+              </>
+            )}
             {["trial", "clean"].includes(charterModal.charterType) ? (
               <p style={{ ...S.amountPreview, color: "#999", marginTop: 14 }}>{charterModal.charterType === "clean" ? "封場清潔不收費，唔會計入收入。" : "試堂不收費，唔會計入收入。"}</p>
             ) : (
@@ -2054,6 +2174,55 @@ export default function App() {
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setCopyInfoModal(null)}>關閉</button>
               <button style={S.modalConfirm} onClick={async () => { try { await navigator.clipboard.writeText(copyInfoModal.text); showToast("已複製"); } catch (e) { showToast("複製失敗，請長按手動複製", "error"); } }}>📋 複製</button>
+            </div>
+          </div></div>
+        )}
+
+        {retroReminderModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>提醒 {retroReminderModal.coachName} 補book</h3>
+            <p style={S.modalText}>揀返教練實際已上堂但未book返嘅時段，會發送提醒（有電話直接開WhatsApp，冇電話畀你copy），同時喺教練首頁出現banner。</p>
+            <Field label="日期"><input style={S.input} type="date" value={retroReminderModal.date} onChange={(e) => setRetroReminderModal({ ...retroReminderModal, date: e.target.value })} /></Field>
+            <Field label="開始時間"><input style={S.input} type="time" value={retroReminderModal.start} onChange={(e) => setRetroReminderModal({ ...retroReminderModal, start: e.target.value })} /></Field>
+            <Field label="時長（小時）"><input style={S.input} type="number" step="0.5" min="0.5" value={retroReminderModal.hours} onChange={(e) => setRetroReminderModal({ ...retroReminderModal, hours: e.target.value })} /></Field>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setRetroReminderModal(null)}>取消</button>
+              <button style={S.modalConfirm} onClick={sendRetroReminder}>發送提醒</button>
+            </div>
+          </div></div>
+        )}
+
+        {retroBookModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>補book記錄</h3>
+            <p style={{ ...S.modalText, textAlign: "center" }}>{retroBookModal.date}　{retroBookModal.start}–{addMinutes(retroBookModal.start, Number(retroBookModal.hours) * 60)}（{retroBookModal.hours}小時）</p>
+            <label style={S.label}>類型</label>
+            <div style={S.segRow}>
+              <button style={retroBookModal.sessionType === "solo" ? S.segActive : S.seg} onClick={() => setRetroBookModal({ ...retroBookModal, sessionType: "solo" })}>1對1</button>
+              <button style={retroBookModal.sessionType === "duo" ? S.segActive : S.seg} onClick={() => setRetroBookModal({ ...retroBookModal, sessionType: "duo" })}>1對2</button>
+            </div>
+            <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位）</label>
+            {myRoster.length === 0 ? (
+              <p style={S.assistHint}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
+            ) : (
+              <div style={S.studentChipWrap}>
+                {myRoster.map(({ name }) => {
+                  const sel = Array.isArray(retroBookModal.students) && retroBookModal.students.includes(name);
+                  const atMax = !sel && (retroBookModal.students || []).length >= 4;
+                  return (
+                    <button key={name} disabled={atMax} style={sel ? S.studentChipActive : atMax ? S.studentChipDisabled : S.studentChip}
+                      onClick={() => {
+                        const cur = retroBookModal.students || [];
+                        setRetroBookModal({ ...retroBookModal, students: sel ? cur.filter((n) => n !== name) : [...cur, name] });
+                      }}>{name}</button>
+                  );
+                })}
+              </div>
+            )}
+            <p style={S.assistHint}>補book都會照樣扣Pass時數，同準時book冇分別；如果嗰個時段已經俾人book咗，會提示你聯絡Admin處理。</p>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setRetroBookModal(null)}>取消</button>
+              <button style={S.modalConfirm} onClick={confirmRetroBooking}>確認補book</button>
             </div>
           </div></div>
         )}
@@ -2187,11 +2356,170 @@ export default function App() {
 
       {view === "calendar" && (
         <div style={S.calContainer}>
+          {isCoach && (() => {
+            const myRetroNotices = retroBookingNotices.filter((n) => n.coachId === currentUser.id && !n.read);
+            const myFilmingNotices = filmingNotices.filter((n) => n.coachId === currentUser.id && !n.read);
+            if (myRetroNotices.length === 0 && myFilmingNotices.length === 0) return null;
+            return (
+              <>
+                {myRetroNotices.map((n) => (
+                  <div key={n.id} style={S.noticeBanner}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span>⚠️ {n.date} {n.start}–{addMinutes(n.start, n.hours * 60)} 未book返記錄</span>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button style={S.linkBtn} onClick={() => setRetroBookModal({ noticeId: n.id, date: n.date, start: n.start, hours: n.hours, sessionType: "solo", students: [] })}>處理</button>
+                        <button style={S.linkBtn} onClick={() => setRetroBookingNotices((prev) => prev.map((x) => x.id === n.id ? { ...x, read: true } : x))}>知道了</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {myFilmingNotices.map((n) => (
+                  <div key={n.id} style={S.noticeBanner}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <span>📹 {n.date} {n.start} 拍片時段已被佔用，自動取消</span>
+                      <button style={S.linkBtn} onClick={() => setFilmingNotices((prev) => prev.map((x) => x.id === n.id ? { ...x, read: true } : x))}>知道了</button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            );
+          })()}
+
+          {isCoach && (() => {
+            // 第0.1項：Reminder Card——今日場地使用一眼睇。三態：已預約／未有預約／已取消
+            const todayStr = formatDate(new Date());
+            const nowMin = (() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); })();
+            const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+            const todayBookings = myBookings.filter((b) => b.date === todayStr).sort((a, b) => toMin(a.start) - toMin(b.start));
+            const todayCancelled = cancelLog.filter((c) => c.coachId === currentUser.id && c.date === todayStr);
+
+            if (todayBookings.length > 0) {
+              // 揀「最近一堂」：優先揀仲未完嘅（結束時間 >= 而家），冇就揀最後一堂（全部已完成）
+              const upcoming = todayBookings.find((b) => toMin(b.start) + b.hours * 60 >= nowMin);
+              const featured = upcoming || todayBookings[todayBookings.length - 1];
+              const end = addMinutes(featured.start, featured.hours * 60);
+              return (
+                <div style={{ ...S.reminderCard, ...S.reminderCardConfirmed }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888", marginBottom: 8 }}>
+                    <span>今日場地使用</span>
+                    {todayBookings.length > 1 && <span>今日共 {todayBookings.length} 堂</span>}
+                  </div>
+                  <div style={S.reminderStatusRow}>
+                    <div style={S.reminderIconOk}>✓</div>
+                    <div style={{ fontWeight: 700, color: "#4ECDC4" }}>{todayBookings.length > 1 ? "最近一堂" : "已預約"}</div>
+                  </div>
+                  <div style={{ marginLeft: 28, marginTop: 4 }}>
+                    <div style={{ fontSize: 18, fontWeight: 700 }}>{featured.start} – {end}</div>
+                    <div style={{ fontSize: 12, color: "#888" }}>{featured.type === "duo" ? "1對2" : "1對1"}{featured.students?.length ? " · " + featured.students.join("、") : ""}</div>
+                  </div>
+                  {todayBookings.length > 1 && (
+                    <div style={S.reminderChipWrap}>
+                      {todayBookings.map((b) => (
+                        <span key={`${b.date}_${b.start}`} style={S.reminderChip}>{b.start}{b.start === featured.start ? " ← 最近" : ""}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (todayCancelled.length > 0) {
+              const c = todayCancelled[todayCancelled.length - 1];
+              return (
+                <div style={{ ...S.reminderCard, ...S.reminderCardCancelled }}>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>今日場地使用</div>
+                  <div style={S.reminderStatusRow}>
+                    <div style={S.reminderIconDanger}>!</div>
+                    <div style={{ fontWeight: 700, color: "#e2685a" }}>今日預約已取消</div>
+                  </div>
+                  <div style={{ marginLeft: 28, marginTop: 4, fontSize: 13, color: "#ddd" }}>原定 {c.start} 嘅場地使用已取消。如需使用，請重新 Booking。</div>
+                  <button style={{ ...S.smallBtn, marginLeft: 28, marginTop: 10 }} onClick={() => { setQuickBook((q) => ({ ...q, date: todayStr, start: c.start })); document.getElementById("quickBookCard")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}>重新 Booking</button>
+                </div>
+              );
+            }
+            return (
+              <div style={{ ...S.reminderCard, ...S.reminderCardEmpty }}>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>今日場地使用</div>
+                <div style={S.reminderStatusRow}>
+                  <div style={S.reminderIconWarn}>!</div>
+                  <div style={{ fontWeight: 700, color: "#FFB347" }}>今日尚未有預約</div>
+                </div>
+                <div style={{ marginLeft: 28, marginTop: 4, fontSize: 13, color: "#ddd" }}>如需使用場地，請先完成 Booking。</div>
+                <button style={{ ...S.smallBtn, marginLeft: 28, marginTop: 10 }} onClick={() => { setQuickBook((q) => ({ ...q, date: todayStr })); document.getElementById("quickBookCard")?.scrollIntoView({ behavior: "smooth", block: "center" }); }}>＋ 建立 Booking</button>
+              </div>
+            );
+          })()}
+
+          {isCoach && (() => {
+            // 第0.2項：快速Book表格——教練自己book用嘅表格式輸入，取代/補充grid點格仔。用返confirmBook同一套驗證同Pass邏輯，唔開新規則
+            const qbDate = quickBook.date || formatDate(days[0]) || formatDate(new Date());
+            const isDuo = quickBook.sessionType === "duo";
+            const passCost = isDuo ? Number(quickBook.hours) + 0.5 : Number(quickBook.hours);
+            const end = addMinutes(quickBook.start, Number(quickBook.hours) * 60);
+            const startOptions = TIME_SLOTS.filter((_, i) => i % 4 === 0); // 表格用整點做選項，減少揀嘢負擔；實際扣鐘同grid一樣以15分鐘為單位計算
+            return (
+              <div id="quickBookCard" style={S.quickBookCard}>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>快速 BOOK 堂</div>
+                <div style={S.qbRow}>
+                  <div style={S.qbField}>
+                    <label style={{ ...S.label, fontSize: 11 }}>日期</label>
+                    <select style={S.input} value={qbDate} onChange={(e) => setQuickBook({ ...quickBook, date: e.target.value })}>
+                      {days.map((d) => <option key={formatDate(d)} value={formatDate(d)}>{formatDay(d)} {formatDate(d).slice(5)}{isTodayDate(d) ? "（今日）" : ""}</option>)}
+                    </select>
+                  </div>
+                  <div style={S.qbField}>
+                    <label style={{ ...S.label, fontSize: 11 }}>開始時間</label>
+                    <select style={S.input} value={quickBook.start} onChange={(e) => setQuickBook({ ...quickBook, start: e.target.value })}>
+                      {startOptions.map((t) => {
+                        const full = canPlace(qbDate, t, Number(quickBook.hours) || 1, 1, currentUser.id, currentUser.id) !== null;
+                        return <option key={t} value={t} disabled={full}>{t}{full ? "（已滿）" : ""}</option>;
+                      })}
+                    </select>
+                  </div>
+                </div>
+                <div style={S.qbRow}>
+                  <div style={S.qbField}>
+                    <label style={{ ...S.label, fontSize: 11 }}>時長（最少 1 小時）</label>
+                    <select style={S.input} value={quickBook.hours} onChange={(e) => setQuickBook({ ...quickBook, hours: Number(e.target.value) })}>
+                      <option value={1}>1 小時</option>
+                      <option value={1.5}>1.5 小時</option>
+                      <option value={2}>2 小時</option>
+                    </select>
+                  </div>
+                  <div style={S.qbField}>
+                    <label style={{ ...S.label, fontSize: 11 }}>類型</label>
+                    <div style={S.segRow}>
+                      <button style={!isDuo ? S.segActive : S.seg} onClick={() => setQuickBook({ ...quickBook, sessionType: "solo" })}>1對1</button>
+                      <button style={isDuo ? S.segActive : S.seg} onClick={() => setQuickBook({ ...quickBook, sessionType: "duo" })}>1對2</button>
+                    </div>
+                  </div>
+                </div>
+                {myRoster.length > 0 ? (
+                  <div style={S.qbField}>
+                    <label style={{ ...S.label, fontSize: 11 }}>學生</label>
+                    <select style={S.input} value={(quickBook.students || [])[0] || ""} onChange={(e) => setQuickBook({ ...quickBook, students: e.target.value ? [e.target.value] : [] })}>
+                      <option value="">請選擇學生</option>
+                      {myRoster.map(({ name }) => <option key={name} value={name}>{name}</option>)}
+                    </select>
+                  </div>
+                ) : (
+                  <input style={S.input} value={quickBook.studentOther || ""} placeholder="學生名（打名就得）" onChange={(e) => setQuickBook({ ...quickBook, studentOther: e.target.value })} />
+                )}
+                <div style={S.qbPreview}>
+                  <div style={S.qbPreviewRow}><span>將預約</span><strong style={{ color: "#4ECDC4" }}>{qbDate} {quickBook.start}–{end} · {isDuo ? "1對2" : "1對1"}</strong></div>
+                  <div style={S.qbPreviewRow}><span>預計扣減</span><strong style={{ color: "#FFB347" }}>{passCost} 小時</strong></div>
+                </div>
+                <button style={S.modalConfirm} onClick={() => confirmBook({ date: qbDate, time: quickBook.start, sessionType: quickBook.sessionType, hours: Number(quickBook.hours), students: quickBook.students, studentOther: quickBook.studentOther, repeatWeeks: 1 })}>確認 Book 堂</button>
+                <p style={S.assistHint}>同點格仔 book 堂用同一套時段衝突同Pass扣鐘規則，最終以送出時系統驗證為準。</p>
+              </div>
+            );
+          })()}
+
           <div style={S.weekNav}>
             <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
             <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
             <button style={S.navBtn} onClick={() => setWeekOffset(0)}>今日</button>
             <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
+            <button style={S.navBtn} onClick={() => { setWeekViewMode((m) => m === "fixed" ? "rolling" : "fixed"); setWeekOffset(0); }} title="切換週視圖模式">🔁 {weekViewMode === "fixed" ? "一至日" : "今日起"}</button>
           </div>
           <p style={S.gridHint}>每格 15 分鐘　｜　同一時段最多 2 名教練　｜　按空格揀 1對1/1對2 同時長</p>
           <div style={S.scaleRow}>
@@ -2348,6 +2676,7 @@ export default function App() {
                 <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
                 <button style={S.navBtn} onClick={() => setWeekOffset(0)}>今日</button>
                 <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
+                <button style={S.navBtn} onClick={() => { setWeekViewMode((m) => m === "fixed" ? "rolling" : "fixed"); setWeekOffset(0); }} title="切換週視圖模式">🔁 {weekViewMode === "fixed" ? "一至日" : "今日起"}</button>
               </div>
               <p style={S.gridHint}>自己嘅課堂正常顯示學生名；其他教練嗰格縮細留白，淨係睇到「有人」，等你一眼睇晒成個禮拜邊忙邊閒。撳「列表」可以管理／取消你自己嘅預約</p>
               <div style={S.calScroll}>

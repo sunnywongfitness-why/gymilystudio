@@ -160,3 +160,14 @@ Training Pass：
 
 如有查詢，歡迎隨時聯絡工作室。`;
 }
+
+// 第6項：Admin發現教練已上堂但未book返，發送嘅補book提醒（WhatsApp deep-link / 系統內部通知共用同一段文字）
+export function retroactiveBookingReminderText(coachName, date, startTime, endTime) {
+  return `${coachName}，你好！🙏
+
+我哋留意到你喺 [${date} ${startTime}–${endTime}] 可能已經用咗場地上堂，但未喺系統入面 book 返。
+
+麻煩補返個記錄，方便計算堂數同流水帳，多謝晒！
+
+📱 開App後，首頁會直接見到呢個時段，撳一下就可以補book。`;
+}
