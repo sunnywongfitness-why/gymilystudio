@@ -197,7 +197,7 @@ export default function App() {
       return;
     }
     const coach = coaches.find((c) => (c.username || "").toLowerCase() === uid && c.password === loginForm.password);
-    if (coach) { setCurrentUser({ ...coach, role: "coach" }); setView("calendar"); saveSession({ role: "coach", id: coach.id }); }
+    if (coach) { setCurrentUser({ ...coach, role: "coach" }); setView("home"); saveSession({ role: "coach", id: coach.id }); }
     else showToast("帳號或密碼錯誤", "error");
   };
   const logout = () => { setCurrentUser(null); setView("login"); setLoginForm({ id: "", password: "" }); clearSession(); };
@@ -1324,15 +1324,15 @@ export default function App() {
     coaches.forEach((c) => { coachPaid[c.id] = purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.amount, 0) + initialCreditsOf(c) * c.rate; });
 
     const isSubAdmin = currentUser.role === "subadmin";
-    const visibleTabs = [["overview", "📊 總覽"], ["schedule", "📅 課表"], ["coaches", "👥 教練"], ["ledger", "💰 流水帳"], ["records", "📋 記錄"], ["settings", "⚙️ 設定"]]
+    const visibleTabs = [["overview", "📊", "總覽"], ["schedule", "📅", "課表"], ["coaches", "👥", "教練"], ["ledger", "💰", "流水帳"], ["records", "📋", "記錄"], ["settings", "⚙️", "設定"]]
       .filter(([k]) => !isSubAdmin || currentUser.permissions?.[k]);
     return (
       <div style={S.appBg}>
         <Header title={isSubAdmin ? `副管理員 · ${currentUser.name}` : "管理員"} onLogout={logout} syncState={syncState} />
         {venueNotice && venueNotice.trim() && <div style={S.noticeBanner}>📢 {venueNotice}（教練都見到呢條公告）</div>}
         <div style={S.tabRow}>
-          {visibleTabs.map(([k, label]) => (
-            <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}>{label}</button>
+          {visibleTabs.map(([k, icon, label]) => (
+            <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}><span style={S.tabIcon}>{icon}</span><span>{label}</span></button>
           ))}
         </div>
 
@@ -1776,7 +1776,15 @@ export default function App() {
 
         {adminTab === "settings" && (
           <div style={S.container}>
-            <h2 style={S.sectionTitle}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
+            {currentUser.role === "admin" && (
+              <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 2px 10px", marginBottom: 6, position: "sticky", top: 0, background: "#0f0f0f", zIndex: 30 }}>
+                {[["set-password", "密碼"], ["set-notice", "場地公告"], ["set-qr-account", "收款QR"], ["set-calendar", "日曆同步"], ["set-whatsapp", "WhatsApp"], ["set-suggestions", "意見箱"], ["set-export", "備份"], ["set-subadmins", "副管理員"], ["set-reset", "重設資料"]].map(([id, label]) => (
+                  <button key={id} style={{ ...S.smallBtn, whiteSpace: "nowrap", flexShrink: 0 }}
+                    onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>
+                ))}
+              </div>
+            )}
+            <h2 id="set-password" style={S.sectionTitle}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
             <div style={S.formCard}>
               <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
               <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
@@ -1787,13 +1795,13 @@ export default function App() {
 
             {currentUser.role === "admin" && (
               <>
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>場地公告</h2>
+                <h2 id="set-notice" style={{ ...S.sectionTitle, marginTop: 28 }}>場地公告</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
                   <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
                 </div>
 
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code</h2>
+                <h2 id="set-qr-account" style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>上傳收款 QR code（例如轉數快／PayMe）。會喺教練 Onboarding 付款資訊同買 Pass 畫面顯示，方便教練掃碼付款。可隨時更換。</p>
                   {paymentQR ? (
@@ -1808,7 +1816,7 @@ export default function App() {
                   {paymentQR && <button style={{ ...S.smallBtn, width: "100%", marginTop: 8 }} onClick={() => setPaymentQR("")}>移除</button>}
                 </div>
 
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
+                <h2 id="set-calendar" style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
                 <div style={S.formCard}>
                   {!cloudEnabled ? (
                     <p style={{ ...S.bookingTime, lineHeight: 1.6 }}>呢個功能需要先開啟雲端同步。</p>
@@ -1831,7 +1839,7 @@ export default function App() {
                   )}
                 </div>
 
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
+                <h2 id="set-whatsapp" style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
                   <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
@@ -1853,7 +1861,7 @@ export default function App() {
                   {paymentQR && <button style={{ ...S.smallBtn, marginTop: 10 }} onClick={() => { setPaymentQR(""); showToast("已移除收款 QR Code"); }}>移除</button>}
                 </div>
 
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
+                <h2 id="set-suggestions" style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
                 <p style={S.assistHint}>教練透過「意見」分頁匿名提交，系統冇存任何身份資訊，連你都查唔到係邊位教練寫嘅。</p>
                 {suggestionBox.length === 0 ? <p style={S.emptyText}>暫無意見</p> : (
                   <div style={S.bookingList}>
@@ -1871,7 +1879,7 @@ export default function App() {
               </>
             )}
 
-            <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料備份</h2>
+            <h2 id="set-export" style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料備份</h2>
             <div style={S.formCard}>
               <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出檔案可直接用 Google Sheets 或 Excel 打開，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄、取消記錄。建議定期備份。</p>
               <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>📊 匯出 Google Sheet 備份</button>
@@ -1881,7 +1889,7 @@ export default function App() {
 
             {currentUser.role === "admin" && (
               <>
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>副管理員帳戶</h2>
+                <h2 id="set-subadmins" style={{ ...S.sectionTitle, marginTop: 28 }}>副管理員帳戶</h2>
                 <p style={S.gridHint}>副管理員可登入並使用下面開啟咗嘅分頁，但唔可以管理副管理員帳戶本身或重設資料。</p>
                 <div style={S.bookingList}>
                   {subAdmins.map((s) => (
@@ -1917,7 +1925,7 @@ export default function App() {
 
             {currentUser.role === "admin" && (
               <>
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>重設資料</h2>
+                <h2 id="set-reset" style={{ ...S.sectionTitle, marginTop: 28 }}>重設資料</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>清除呢部裝置嘅所有資料，回復至初始狀態。建議先匯出備份。此動作無法復原。</p>
                   <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff" }} onClick={() => setResetModal(true)}>🗑️ 重設所有資料</button>
@@ -2192,41 +2200,6 @@ export default function App() {
           </div></div>
         )}
 
-        {retroBookModal && (
-          <div style={S.modalOverlay}><div style={S.modal}>
-            <h3 style={S.modalTitle}>補book記錄</h3>
-            <p style={{ ...S.modalText, textAlign: "center" }}>{retroBookModal.date}　{retroBookModal.start}–{addMinutes(retroBookModal.start, Number(retroBookModal.hours) * 60)}（{retroBookModal.hours}小時）</p>
-            <label style={S.label}>類型</label>
-            <div style={S.segRow}>
-              <button style={retroBookModal.sessionType === "solo" ? S.segActive : S.seg} onClick={() => setRetroBookModal({ ...retroBookModal, sessionType: "solo" })}>1對1</button>
-              <button style={retroBookModal.sessionType === "duo" ? S.segActive : S.seg} onClick={() => setRetroBookModal({ ...retroBookModal, sessionType: "duo" })}>1對2</button>
-            </div>
-            <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位）</label>
-            {myRoster.length === 0 ? (
-              <p style={S.assistHint}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
-            ) : (
-              <div style={S.studentChipWrap}>
-                {myRoster.map(({ name }) => {
-                  const sel = Array.isArray(retroBookModal.students) && retroBookModal.students.includes(name);
-                  const atMax = !sel && (retroBookModal.students || []).length >= 4;
-                  return (
-                    <button key={name} disabled={atMax} style={sel ? S.studentChipActive : atMax ? S.studentChipDisabled : S.studentChip}
-                      onClick={() => {
-                        const cur = retroBookModal.students || [];
-                        setRetroBookModal({ ...retroBookModal, students: sel ? cur.filter((n) => n !== name) : [...cur, name] });
-                      }}>{name}</button>
-                  );
-                })}
-              </div>
-            )}
-            <p style={S.assistHint}>補book都會照樣扣Pass時數，同準時book冇分別；如果嗰個時段已經俾人book咗，會提示你聯絡Admin處理。</p>
-            <div style={S.modalBtns}>
-              <button style={S.modalCancel} onClick={() => setRetroBookModal(null)}>取消</button>
-              <button style={S.modalConfirm} onClick={confirmRetroBooking}>確認補book</button>
-            </div>
-          </div></div>
-        )}
-
         {adminCancelModal && (() => {
           const win = adminCancelModal.type !== "charter" ? (getCoach(adminCancelModal.coachId)?.cancelWindowHours ?? 24) : 24;
           const within24 = adminCancelModal.type !== "charter" && hoursUntil(adminCancelModal.date, adminCancelModal.start) < win;
@@ -2348,13 +2321,22 @@ export default function App() {
         );
       })()}
       <div style={S.tabRow}>
-        <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}>📅 預約場地</button>
-        <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}>📋 我的預約 {myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}</button>
-        <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}>📈 上堂情況</button>
-        <button style={view === "other" ? S.tabActive : S.tab} onClick={() => setView("other")}>⚙️ 其他</button>
+        <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}><span style={S.tabIcon}>📅</span><span>預約場地</span></button>
+        <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}><span style={S.tabIcon}>📋</span><span>我的預約</span>{myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}</button>
+        <button style={view === "home" ? S.tabActive : S.tab} onClick={() => setView("home")}>
+          <span style={{ position: "relative" }}>
+            <span style={S.tabIcon}>🏠</span>
+            {isCoach && (retroBookingNotices.some((n) => n.coachId === currentUser.id && !n.read) || filmingNotices.some((n) => n.coachId === currentUser.id && !n.read)) && (
+              <span style={{ position: "absolute", top: -2, right: -4, width: 8, height: 8, borderRadius: "50%", background: "#FFB347" }} />
+            )}
+          </span>
+          <span>首頁</span>
+        </button>
+        <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}><span style={S.tabIcon}>👥</span><span>學生管理</span></button>
+        <button style={view === "other" ? S.tabActive : S.tab} onClick={() => setView("other")}><span style={S.tabIcon}>⚙️</span><span>其他</span></button>
       </div>
 
-      {view === "calendar" && (
+      {view === "home" && (
         <div style={S.calContainer}>
           {isCoach && (() => {
             const myRetroNotices = retroBookingNotices.filter((n) => n.coachId === currentUser.id && !n.read);
@@ -2451,7 +2433,7 @@ export default function App() {
 
           {isCoach && (() => {
             // 第0.2項：快速Book表格——教練自己book用嘅表格式輸入，取代/補充grid點格仔。用返confirmBook同一套驗證同Pass邏輯，唔開新規則
-            const qbDate = quickBook.date || formatDate(days[0]) || formatDate(new Date());
+            const qbDate = quickBook.date || formatDate(new Date());
             const isDuo = quickBook.sessionType === "duo";
             const passCost = isDuo ? Number(quickBook.hours) + 0.5 : Number(quickBook.hours);
             const end = addMinutes(quickBook.start, Number(quickBook.hours) * 60);
@@ -2462,9 +2444,7 @@ export default function App() {
                 <div style={S.qbRow}>
                   <div style={S.qbField}>
                     <label style={{ ...S.label, fontSize: 11 }}>日期</label>
-                    <select style={S.input} value={qbDate} onChange={(e) => setQuickBook({ ...quickBook, date: e.target.value })}>
-                      {days.map((d) => <option key={formatDate(d)} value={formatDate(d)}>{formatDay(d)} {formatDate(d).slice(5)}{isTodayDate(d) ? "（今日）" : ""}</option>)}
-                    </select>
+                    <input style={S.input} type="date" min={formatDate(new Date())} value={qbDate} onChange={(e) => setQuickBook({ ...quickBook, date: e.target.value })} />
                   </div>
                   <div style={S.qbField}>
                     <label style={{ ...S.label, fontSize: 11 }}>開始時間</label>
@@ -2513,7 +2493,11 @@ export default function App() {
               </div>
             );
           })()}
+        </div>
+      )}
 
+      {view === "calendar" && (
+        <div style={S.calContainer}>
           <div style={S.weekNav}>
             <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
             <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
@@ -2948,6 +2932,41 @@ export default function App() {
             <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
           </div>
         </div>
+      )}
+
+      {retroBookModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>補book記錄</h3>
+          <p style={{ ...S.modalText, textAlign: "center" }}>{retroBookModal.date}　{retroBookModal.start}–{addMinutes(retroBookModal.start, Number(retroBookModal.hours) * 60)}（{retroBookModal.hours}小時）</p>
+          <label style={S.label}>類型</label>
+          <div style={S.segRow}>
+            <button style={retroBookModal.sessionType === "solo" ? S.segActive : S.seg} onClick={() => setRetroBookModal({ ...retroBookModal, sessionType: "solo" })}>1對1</button>
+            <button style={retroBookModal.sessionType === "duo" ? S.segActive : S.seg} onClick={() => setRetroBookModal({ ...retroBookModal, sessionType: "duo" })}>1對2</button>
+          </div>
+          <label style={{ ...S.label, marginTop: 14 }}>學生（最多4位）</label>
+          {myRoster.length === 0 ? (
+            <p style={S.assistHint}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
+          ) : (
+            <div style={S.studentChipWrap}>
+              {myRoster.map(({ name }) => {
+                const sel = Array.isArray(retroBookModal.students) && retroBookModal.students.includes(name);
+                const atMax = !sel && (retroBookModal.students || []).length >= 4;
+                return (
+                  <button key={name} disabled={atMax} style={sel ? S.studentChipActive : atMax ? S.studentChipDisabled : S.studentChip}
+                    onClick={() => {
+                      const cur = retroBookModal.students || [];
+                      setRetroBookModal({ ...retroBookModal, students: sel ? cur.filter((n) => n !== name) : [...cur, name] });
+                    }}>{name}</button>
+                );
+              })}
+            </div>
+          )}
+          <p style={S.assistHint}>補book都會照樣扣Pass時數，同準時book冇分別；如果嗰個時段已經俾人book咗，會提示你聯絡Admin處理。</p>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setRetroBookModal(null)}>取消</button>
+            <button style={S.modalConfirm} onClick={confirmRetroBooking}>確認補book</button>
+          </div>
+        </div></div>
       )}
 
       {bookModal && (() => {
