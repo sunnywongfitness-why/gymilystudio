@@ -3,19 +3,21 @@ import * as XLSX from "xlsx";
 import { cloudEnabled, cloudLoad, cloudSave, cloudSubscribe, SUPABASE_URL } from "./supabase.js";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import {
-  ADMIN_TAB_KEYS, COLORS, TIME_SLOTS, LS_KEY,
+  ADMIN_TAB_KEYS, TIME_SLOTS, LS_KEY,
 } from "./constants.js";
 import {
   BRAND_NAME, LOGO, STAMP_PNG, DEFAULT_COACHES, DEFAULT_SUBADMINS,
   MAX_CONCURRENT, DUO_BASE, DUO_HALF_HOUR_ADD, CHARTER_PRICE,
   ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS,
   DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
+  PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS, SHARED_PASS_HOURS, SHARED_PASS_MONTHS,
+  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText,
 } from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
   stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
   isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
-  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate,
+  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel,
 } from "./helpers.js";
 import { S } from "./styles.js";
 import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
@@ -26,10 +28,13 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState(() => persisted("adminPassword", DEFAULT_ADMIN_PASSWORD));
   const [whatsappNumber, setWhatsappNumber] = useState(() => persisted("whatsappNumber", ""));
   const [venueNotice, setVenueNotice] = useState(() => persisted("venueNotice", ""));
+  const [paymentQR, setPaymentQR] = useState(() => persisted("paymentQR", "")); // 收款 QR code（base64 圖），admin可隨時上傳/更新
   const [suggestionBox, setSuggestionBox] = useState(() => persisted("suggestionBox", []));
   const [adminCalendarToken, setAdminCalendarToken] = useState(() => persisted("adminCalendarToken", ""));
   const [signatureStore, setSignatureStore] = useState(() => persisted("signatureStore", {})); // 簽名圖獨立存一份，唔跟住 booking 喺每個15分鐘格重複
   const [filmingNotices, setFilmingNotices] = useState(() => persisted("filmingNotices", [])); // 拍片被頂走嘅通知
+  const [passUsageLog, setPassUsageLog] = useState(() => persisted("passUsageLog", [])); // {id, coachId, date, hours, passType, sessionType} 教練自己book堂扣Pass時數嘅記錄，用嚟計「個人證」呢類受限類型仲剩幾多
+  const [sharedPasses, setSharedPasses] = useState(() => persisted("sharedPasses", [])); // {id, totalHours, usedHours, purchaseDate, expiryDate, coachIds:[id1,id2], usageByCoach:{[id]:hours}} 共享訓練通行證
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
   const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
@@ -43,6 +48,8 @@ export default function App() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [calScale, setCalScale] = useState(() => loadCalScale());
   const [myBookingsView, setMyBookingsView] = useState("list"); // list | calendar
+  const [myBookingsSortMode, setMyBookingsSortMode] = useState("newest"); // newest | closest（距今日最近排最頂）
+  const [studentDrafts, setStudentDrafts] = useState({}); // 學生「每堂收費」／「剩餘堂數」輸入緊嘅暫存字串，等撳delete可以留空唔會即刻變返0，key: `${name}_${field}`
   const updateCalScale = (v) => { setCalScale(v); saveCalScale(v); };
   const [bookModal, setBookModal] = useState(null);   // { date, time }
   const [charterModal, setCharterModal] = useState(null); // admin charter { date, time, hours }
@@ -65,10 +72,13 @@ export default function App() {
     if (d.adminPassword !== undefined) setAdminPassword(d.adminPassword);
     if (d.whatsappNumber !== undefined) setWhatsappNumber(d.whatsappNumber);
     if (d.venueNotice !== undefined) setVenueNotice(d.venueNotice);
+    if (d.paymentQR !== undefined) setPaymentQR(d.paymentQR);
     if (d.suggestionBox !== undefined) setSuggestionBox(d.suggestionBox);
     if (d.adminCalendarToken !== undefined) setAdminCalendarToken(d.adminCalendarToken);
     if (d.signatureStore !== undefined) setSignatureStore(d.signatureStore);
     if (d.filmingNotices !== undefined) setFilmingNotices(d.filmingNotices);
+    if (d.passUsageLog !== undefined) setPassUsageLog(d.passUsageLog);
+    if (d.sharedPasses !== undefined) setSharedPasses(d.sharedPasses);
     if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
     if (d.studentPurchaseLog !== undefined) setStudentPurchaseLog(d.studentPurchaseLog);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
@@ -90,7 +100,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -109,7 +119,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -125,7 +135,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -136,6 +146,8 @@ export default function App() {
   const [pwForm, setPwForm] = useState({ old: "", new1: "", new2: "" });
   const [editCoach, setEditCoach] = useState(null);
   const [addCreditModal, setAddCreditModal] = useState(null);
+  const [sharedPassModal, setSharedPassModal] = useState(null); // {coachIdA, coachIdB, date}（第9項：共享訓練通行證）
+  const [sharedTopUpModal, setSharedTopUpModal] = useState(null); // {sharedId, qty}（教練/admin都可以幫共享Pass加值）
   const [adminTab, setAdminTab] = useState(() => initialSession?.adminTab || "overview");
   const [recordsView, setRecordsView] = useState("bookings"); // bookings | cancelled
   const [recCoach, setRecCoach] = useState("all");
@@ -145,11 +157,13 @@ export default function App() {
   const [recExpanded, setRecExpanded] = useState(null);
   const [coachSort, setCoachSort] = useState("remain"); // remain|paid|name
   const [expandedCoachId, setExpandedCoachId] = useState(null);
+  const [coachDrillView, setCoachDrillView] = useState("purchase"); // purchase | sessions（第6項：教練每月上堂詳情）
   const [viewMonth, setViewMonth] = useState(() => monthKey(formatDate(new Date())));
   const [monthsExpanded, setMonthsExpanded] = useState(false);
   const [newStudentName, setNewStudentName] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
   const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
+  const [sigReportModal, setSigReportModal] = useState(null); // {studentName, month}（第2項：學生簽名月度報表）
   const [studentLogOpen, setStudentLogOpen] = useState(null);
   const [rosterSortMode, setRosterSortMode] = useState("custom"); // custom | used | remain | name
   const [resetModal, setResetModal] = useState(false);
@@ -269,33 +283,56 @@ export default function App() {
     if (sessionType === "filming") return confirmFilmingBooking();
     if (sessionType === "solo" && liveUser.allowSolo === false) { showToast("你冇一對一預約權限", "error"); return; }
     if (sessionType === "duo" && liveUser.allowDuo === false) { showToast("你冇一對二預約權限", "error"); return; }
-    const creditCost = hours; // 1hr = 1堂, 1.5hr = 1.5堂
+    const passCost = sessionType === "duo" ? hours + 0.5 : hours; // 第9項 Training Pass：1對2 喺原定時長之上，額外多扣0.5小時
+    const price = passCost * 100; // Training Pass：買咗Pass之後一律 $100/小時計算（唔理solo/duo）
+    const rentalCost = price; // Pass制下，收費即係租場成本，冇再獨立計
     const repeatWeeks = Math.max(1, bookModal.repeatWeeks || 1);
     const selected = Array.isArray(bookModal.students) ? bookModal.students : [];
     const extra = (bookModal.studentOther || "").trim();
     const studentList = [...selected, ...(extra ? [extra] : [])].filter(Boolean).slice(0, 4);
     const studentCharges = {};
     studentList.forEach((n) => { const s = myRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
-    const price = sessionType === "duo" ? duoPrice(hours) : liveUser.rate * hours;
-    const rentalCost = liveUser.rate * hours; // 租場費用：用「落單嗰刻」嘅租金snapshot，日後改租金唔會影響舊紀錄
 
-    let usedRemaining = remaining;
+    // 本地追蹤仲有幾多 Pass 時數可用：跨 repeat 週次要遞減，唔可以靠實時 state（loop 入面 state 未更新）
+    let personalLeft = personalRemaining(currentUser.id);
+    let flexibleLeft = flexibleRemaining(currentUser.id);
+    const sharedLeftMap = {};
+    sharedPassesOf(currentUser.id).forEach((sp) => { sharedLeftMap[sp.id] = sharedRemaining(sp); });
+
+    const allDeductions = []; // 逐週分配結果，成功晒先一次過 commit
     const newBookingsBySlot = {}; // `${date}_${slot}` -> entry to append
     const filmingToCancel = []; // 因為呢次 book 堂而被自動取消嘅拍片安排
     let okCount = 0, skippedDates = [];
     for (let w = 0; w < repeatWeeks; w++) {
       const wDate = w === 0 ? date : addDaysToDate(date, w * 7);
-      if (creditCost > usedRemaining) { skippedDates.push(`${wDate}（堂數不足）`); continue; }
+      // 分池：solo 優先扣「個人證」（solo限定，用晒佢先，唔好嘥），唔夠先用「彈性／舊制」，再唔夠試共享 Pass
+      let dedu = null;
+      if (sessionType === "solo" && personalLeft >= passCost) dedu = { pool: "personal", amount: passCost };
+      else if (flexibleLeft >= passCost) dedu = { pool: "flexible", amount: passCost };
+      else {
+        const sharedId = Object.keys(sharedLeftMap).find((id) => sharedLeftMap[id] >= passCost);
+        if (sharedId) dedu = { pool: "shared", sharedId, amount: passCost };
+      }
+      if (!dedu) { skippedDates.push(`${wDate}（Pass 時數不足）`); continue; }
       const err = canPlace(wDate, time, hours, 1, currentUser.id);
       if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
       const wSlots = slotsFor(time, hours);
       findOverriddenFilming(wDate, wSlots, currentUser.id).forEach((f) => filmingToCancel.push(f));
-      const entry = { coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      const logId = "pu" + Date.now() + "-" + w + "-" + Math.random().toString(36).slice(2);
+      dedu.id = logId;
+      const entry = {
+        coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges,
+        passPool: dedu.pool, passCost: dedu.amount, passLogId: dedu.pool !== "shared" ? logId : null, sharedPassId: dedu.pool === "shared" ? dedu.sharedId : null,
+        createdAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+      };
       wSlots.forEach((s) => {
         const key = `${wDate}_${s}`;
         newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
       });
-      usedRemaining -= creditCost;
+      if (dedu.pool === "personal") personalLeft -= dedu.amount;
+      else if (dedu.pool === "flexible") flexibleLeft -= dedu.amount;
+      else sharedLeftMap[dedu.sharedId] -= dedu.amount;
+      allDeductions.push(dedu);
       okCount++;
     }
 
@@ -316,7 +353,7 @@ export default function App() {
     if (filmingToCancel.length > 0) {
       setFilmingNotices((prev) => [...filmingToCancel.map((f) => ({ id: "fn" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: f.coachId, date: f.date, start: f.start, hours: f.hours, read: false })), ...prev]);
     }
-    setCoaches((prev) => prev.map((c) => c.id === currentUser.id ? { ...c, used: c.used + creditCost * okCount } : c));
+    commitPassDeduction(currentUser.id, sessionType, allDeductions);
     if (repeatWeeks > 1) {
       showToast(skippedDates.length === 0 ? `已成功預約 ${okCount} 週` : `已預約 ${okCount} 週，跳過 ${skippedDates.length} 週：${skippedDates.join("、")}`);
     } else {
@@ -327,7 +364,9 @@ export default function App() {
 
   // ADMIN: place a rental (包場/小組=全場2位, 試堂=1位), price editable
   const confirmCharter = () => {
-    const { date, time, hours, charterType, price, coachName } = charterModal;
+    const { date, time, charterType, price, coachName } = charterModal;
+    const hours = Number(charterModal.hours) || 0;
+    if (hours <= 0) { showToast("請輸入有效時長", "error"); return; }
     if (isClosedDay(date)) { showToast("休息日", "error"); return; }
     const need = charterType === "trial" ? 1 : MAX_CONCURRENT;
     const err = canPlace(date, time, hours, need);
@@ -415,20 +454,36 @@ export default function App() {
       return u;
     });
     // 留底：取消記錄（先記低先删，等日後可以查到呢個時段點解空咗）
+    // 第12項：記低實際操作者身份——subadmin 記返實際姓名，唔再淨係得籠統嘅"admin"
+    const actorTag = byAdmin
+      ? (currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin")
+      : "coach";
     setCancelLog((prev) => [{
       date, start, hours: meta.hours, type: meta.type, charterType: meta.charterType || null,
       coachId: meta.type === "charter" ? null : coachId,
       coachName: meta.type === "charter" ? (meta.coachName || "") : (getCoach(coachId)?.name || ""),
       price: meta.price || 0,
-      cancelledBy: byAdmin ? "admin" : "coach",
+      cancelledBy: actorTag,
       cancelledAt: new Date().toISOString().slice(0, 16).replace("T", " "),
     }, ...prev]);
     if (meta.type !== "charter") {
-      setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - meta.hours) } : c));
+      if (meta.passPool === "shared" && meta.sharedPassId) {
+        // 共享 Pass 退款：完全唔掂 coach.credits/used，淨係退返嗰張共享 Pass 自己嘅額度
+        setSharedPasses((prev) => prev.map((sp) => sp.id === meta.sharedPassId
+          ? { ...sp, usedHours: Math.max(0, (sp.usedHours || 0) - (meta.passCost || 0)), usageByCoach: { ...(sp.usageByCoach || {}), [coachId]: Math.max(0, ((sp.usageByCoach || {})[coachId] || 0) - (meta.passCost || 0)) } }
+          : sp));
+      } else if (meta.passPool && meta.passLogId) {
+        // 個人證／彈性池退款：移走返個對應嘅 passUsageLog 記錄，同退返 coach.used
+        setPassUsageLog((prev) => prev.filter((x) => x.id !== meta.passLogId));
+        setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - (meta.passCost || meta.hours)) } : c));
+      } else {
+        // 冇 passPool 標記：舊制／Admin代教練book嘅單次收費堂，退返原本嘅堂數（rate-based，唔涉及Pass）
+        setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - meta.hours) } : c));
+      }
       // 由管理員協助、而且係該教練設定嘅通知時數內取消，計入本月額度
       const win = getCoach(coachId)?.cancelWindowHours ?? 24;
       if (byAdmin && hoursUntil(date, start) < win) {
-        setAssistCancelLog((prev) => [{ coachId, month: monthKey(formatDate(new Date())), date, start }, ...prev]);
+        setAssistCancelLog((prev) => [{ coachId, month: monthKey(formatDate(new Date())), date, start, by: actorTag }, ...prev]);
       }
     } else {
       setCharterLog((prev) => prev.filter((r) => !(r.bookDate === date && r.start === start)));
@@ -577,6 +632,33 @@ export default function App() {
   };
   const adminCalendarFeedUrl = adminCalendarToken ? `${SUPABASE_URL}/functions/v1/coach-calendar?adminToken=${adminCalendarToken}` : "";
 
+  // 上傳收款 QR：縮到最大邊長 512px、輸出 JPEG（quality 0.8），控制 base64 檔案大細，減輕 jsonb 資料庫負擔
+  const handleQRUpload = (file) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { showToast("請揀圖片檔案", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 512;
+        let { width, height } = img;
+        if (width > height && width > MAX) { height = Math.round(height * MAX / width); width = MAX; }
+        else if (height > MAX) { width = Math.round(width * MAX / height); height = MAX; }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, width, height); // 白底，避免透明 QR 掃唔到
+        ctx.drawImage(img, 0, 0, width, height);
+        setPaymentQR(canvas.toDataURL("image/jpeg", 0.8));
+        showToast("已更新收款 QR Code");
+      };
+      img.onerror = () => showToast("圖片讀取失敗", "error");
+      img.src = ev.target.result;
+    };
+    reader.onerror = () => showToast("檔案讀取失敗", "error");
+    reader.readAsDataURL(file);
+  };
+
   const submitSuggestion = (text) => {
     const t = text.trim();
     if (!t) return;
@@ -602,12 +684,32 @@ export default function App() {
     showToast("密碼已更新");
   };
 
-  const addCredits = (coachId, qty, date, expiryDate) => {
+  const addCredits = (coachId, qty, date, expiryDate, passType = null) => {
     const coach = getCoach(coachId);
-    const amount = qty * coach.rate;
+    const rate = passType ? PASS_HOURLY_RATE : coach.rate;
+    const amount = qty * rate;
+    const actorTag = currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin";
     setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, credits: c.credits + qty } : c));
-    setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: date || new Date().toISOString().slice(0, 10), coachId, coachName: coach.name, qty, amount, rate: coach.rate, expiryDate: expiryDate || null }, ...prev]);
-    showToast(`已為 ${coach.name} 增加 ${qty} 堂（$${amount}）${expiryDate ? `，失效日：${expiryDate}` : ""}`);
+    setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: date || new Date().toISOString().slice(0, 10), coachId, coachName: coach.name, qty, amount, rate, expiryDate: expiryDate || null, addedBy: actorTag, passType: passType || null }, ...prev]);
+    showToast(`已為 ${coach.name} 增加 ${qty} 小時${passType ? `（${passType === "personal" ? "個人證" : "彈性證"}）` : ""}（$${amount}）${expiryDate ? `，失效日：${expiryDate}` : ""}`);
+  };
+
+  // 開一張共享訓練通行證：硬性2位教練，30小時／12個月，兩位教練其中一位或admin都可以之後幫佢加值（見addSharedPassHours）
+  const createSharedPass = (coachIdA, coachIdB, date) => {
+    if (coachIdA === coachIdB) { showToast("要揀兩位唔同嘅教練", "error"); return; }
+    const id = "sp" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    const purchaseDate = date || formatDate(new Date());
+    setSharedPasses((prev) => [{
+      id, totalHours: SHARED_PASS_HOURS, usedHours: 0, purchaseDate,
+      expiryDate: addMonthsToDate(purchaseDate, SHARED_PASS_MONTHS),
+      coachIds: [coachIdA, coachIdB], usageByCoach: { [coachIdA]: 0, [coachIdB]: 0 },
+    }, ...prev]);
+    showToast(`已開共享 Pass（${getCoach(coachIdA)?.name} ＋ ${getCoach(coachIdB)?.name}，${SHARED_PASS_HOURS}小時）`);
+  };
+  // 幫一張共享 Pass 加時數：兩位當事教練其中一位，或者 admin，都可以做
+  const addSharedPassHours = (sharedId, qty) => {
+    setSharedPasses((prev) => prev.map((sp) => sp.id === sharedId ? { ...sp, totalHours: (sp.totalHours || 0) + qty } : sp));
+    showToast(`已為共享 Pass 增加 ${qty} 小時`);
   };
 
   // FIFO：將某教練嘅 used 堂數，依購買時間順序分配到每筆購買記錄，計出每筆嘅「已用／剩餘」
@@ -628,6 +730,66 @@ export default function App() {
     const today = formatDate(new Date());
     return purchaseFifoStatus(coachId).filter((b) => b.remaining > 0 && b.expiryDate &&
       (new Date(`${b.expiryDate}T00:00:00`) - new Date(`${today}T00:00:00`)) / 86400000 <= EXPIRY_WARN_DAYS);
+  };
+  // 已經過期但仲有剩餘時數嘅 Pass 批次（過期唔鎖，淨係提醒）
+  const expiredPassBatchesOf = (coachId) => {
+    const today = formatDate(new Date());
+    return purchaseFifoStatus(coachId).filter((b) => b.remaining > 0 && b.passType && b.expiryDate && b.expiryDate < today);
+  };
+
+  // ===== 第9項：Training Pass 制度 =====
+  // 呢位教練「個人訓練通行證」（solo限定）總共買咗幾多小時
+  const personalPurchased = (coachId) => purchaseLog.filter((r) => r.coachId === coachId && r.passType === "personal").reduce((s, r) => s + r.qty, 0);
+  // 呢位教練喺 passUsageLog 入面，用咗幾多「個人證」時數（只有教練自己 book 堂先會計入呢個 log）
+  const personalConsumed = (coachId) => passUsageLog.filter((r) => r.coachId === coachId && r.passType === "personal").reduce((s, r) => s + r.hours, 0);
+  const personalRemaining = (coachId) => Math.max(0, personalPurchased(coachId) - personalConsumed(coachId));
+  // 「彈性／舊制」呢個唔限類型嘅池：總剩餘（credits-used）減去「個人證」嗰截，即係solo/duo/包場都用得嘅部分
+  const flexibleRemaining = (coachId) => {
+    const c = getCoach(coachId);
+    if (!c) return 0;
+    const total = (c.credits || 0) - (c.used || 0);
+    return Math.max(0, total - personalRemaining(coachId));
+  };
+  // 呢位教練有份嘅共享 Pass（可能有0張、1張，硬性上限2位教練/張）
+  const sharedPassesOf = (coachId) => sharedPasses.filter((sp) => (sp.coachIds || []).includes(coachId));
+  const sharedRemaining = (sp) => Math.max(0, (sp.totalHours || 0) - (sp.usedHours || 0));
+
+  // 教練自己 book solo/duo 堂：計算收費同扣邊個池，$100/小時計，1對2 額外多扣0.5小時
+  // 回傳 { ok, price, deductions:[{pool,amount}], error }，pool: "personal" | "flexible" | "shared"
+  const allocatePassHours = (coachId, sessionType, hours) => {
+    const need = sessionType === "duo" ? hours + 0.5 : hours;
+    const price = need * 100;
+    if (sessionType === "solo") {
+      const pRemain = personalRemaining(coachId);
+      if (pRemain >= need) return { ok: true, price, need, deductions: [{ pool: "personal", amount: need }] };
+    }
+    const fRemain = flexibleRemaining(coachId);
+    if (fRemain >= need) return { ok: true, price, need, deductions: [{ pool: "flexible", amount: need }] };
+    // 自己個人／彈性池都唔夠：試吓有冇共享 Pass 夠用（最後手段，優先用自己嘅時數）
+    const shared = sharedPassesOf(coachId).find((sp) => sharedRemaining(sp) >= need);
+    if (shared) return { ok: true, price, need, deductions: [{ pool: "shared", sharedId: shared.id, amount: need }] };
+    return { ok: false, error: `Pass 時數不足（需要 ${need} 小時），請聯絡 admin 增購` };
+  };
+
+  // 實際執行 Pass 扣鐘：personal/flexible 池會記落 passUsageLog + 扣 coach.used（同舊制credits/used共用同一組數字）；
+  // shared 池完全獨立，唔會掂 coach.credits/used，淨係扣返嗰張共享 Pass 自己嘅 usedHours/usageByCoach
+  const commitPassDeduction = (coachId, sessionType, deductions) => {
+    const nonShared = deductions.filter((d) => d.pool !== "shared").reduce((s, d) => s + d.amount, 0);
+    if (nonShared > 0) {
+      setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: c.used + nonShared } : c));
+      setPassUsageLog((prev) => [
+        ...deductions.filter((d) => d.pool !== "shared").map((d) => ({
+          id: d.id || ("pu" + Date.now() + "-" + Math.random().toString(36).slice(2)),
+          coachId, date: formatDate(new Date()), hours: d.amount, passType: d.pool, sessionType,
+        })),
+        ...prev,
+      ]);
+    }
+    deductions.filter((d) => d.pool === "shared").forEach((d) => {
+      setSharedPasses((prev) => prev.map((sp) => sp.id === d.sharedId
+        ? { ...sp, usedHours: (sp.usedHours || 0) + d.amount, usageByCoach: { ...(sp.usageByCoach || {}), [coachId]: ((sp.usageByCoach || {})[coachId] || 0) + d.amount } }
+        : sp));
+    });
   };
 
   // sanitize sheet names (Excel: <=31 chars, no : \ / ? * [ ])
@@ -749,7 +911,77 @@ export default function App() {
     }
   };
 
-  // 教練自己「我的收入（近3個月）」一鍵匯出 .xlsx（Google Sheets／Excel 都可以直接打開）
+  // 第2項：學生簽名月度報表——教練自己攞返某個學生某個月嘅上堂記錄連簽名圖，冇簽到嘅堂都會列出並標記「未簽」
+  const generateSignatureReportPDF = async (studentName, month) => {
+    try {
+      const rows = myBookings
+        .filter((b) => (b.students || []).includes(studentName) && monthKey(b.date) === month)
+        .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
+      if (rows.length === 0) { showToast(`${month} 冇 ${studentName} 嘅上堂記錄`, "error"); return; }
+
+      const teal = rgb(...INVOICE_THEME_RGB);
+      const black = rgb(0.1, 0.1, 0.1);
+      const grey = rgb(0.6, 0.6, 0.6);
+      const red = rgb(0.8, 0.2, 0.2);
+
+      const pdfDoc = await PDFDocument.create();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+      const marginX = 42;
+      const pageW = 595.28, pageH = 841.89;
+      const rightX = pageW - marginX;
+      let page, y;
+
+      const newPage = () => {
+        page = pdfDoc.addPage([pageW, pageH]);
+        page.drawRectangle({ x: 0, y: pageH - 70, width: pageW, height: 70, color: teal });
+        page.drawText(`${studentName} 上堂簽到記錄`, { x: marginX, y: pageH - 40, size: 16, font: bold, color: rgb(1, 1, 1) });
+        page.drawText(`${month}　教練：${liveUser.name}`, { x: marginX, y: pageH - 58, size: 10, font, color: rgb(1, 1, 1) });
+        y = pageH - 95;
+      };
+      newPage();
+
+      for (const b of rows) {
+        const rowH = 60;
+        if (y - rowH < 60) newPage();
+        page.drawText(`${b.date}（${formatDay(new Date(`${b.date}T00:00:00`))}）  ${b.start}–${addMinutes(b.start, b.hours * 60)}（${b.hours}小時）  ${b.type === "duo" ? "1對2" : "1對1"}`, { x: marginX, y, size: 10, font, color: black });
+        const sigKey = `${liveUser.id}_${b.date}_${b.start}_${studentName}`;
+        const sig = signatureStore[sigKey];
+        if (sig && sig.dataUrl) {
+          try {
+            const sigBytes = await fetch(sig.dataUrl).then((r) => r.arrayBuffer());
+            const sigImg = await pdfDoc.embedPng(sigBytes);
+            const sigW = 110, sigH = sigImg.height * (sigW / sigImg.width);
+            page.drawRectangle({ x: rightX - sigW - 8, y: y - sigH + 4, width: sigW + 8, height: sigH + 4, borderColor: grey, borderWidth: 0.5 });
+            page.drawImage(sigImg, { x: rightX - sigW - 4, y: y - sigH + 6, width: sigW, height: sigH });
+            y -= (sigH + 14);
+          } catch (e) {
+            page.drawText("（簽名圖讀取失敗）", { x: rightX - 110, y: y - 12, size: 9, font, color: red });
+            y -= 40;
+          }
+        } else {
+          page.drawText("⚠ 未簽", { x: rightX - 40, y, size: 10, font: bold, color: red });
+          y -= 40;
+        }
+        page.drawLine({ start: { x: marginX, y: y + 6 }, end: { x: rightX, y: y + 6 }, thickness: 0.5, color: grey });
+        y -= 8;
+      }
+
+      const pdfBytes = await pdfDoc.save();
+      const blob = new Blob([pdfBytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `簽到記錄_${studentName}_${month}.pdf`;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast("已生成簽到月報表");
+    } catch (e) {
+      console.error(e);
+      showToast("生成報表失敗，請再試", "error");
+    }
+  };
+
+
   const exportMyIncomeSheet = () => {
     try {
       const wb = XLSX.utils.book_new();
@@ -827,7 +1059,7 @@ export default function App() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(chRows.length ? chRows : [{ 落單時間: "", 預約日期: "", 開始: "", 時長小時: "", 類型: "", 負責教練: "", 收費: "", 已取消: "", 取消時間: "" }]), "包場小組");
 
       // 取消記錄
-      const cxRows = cancelLog.map((r) => ({ 原定日期: r.date, 開始: r.start, 時長小時: r.hours, 類型: r.type === "charter" ? rentalFull(r.charterType) : r.type === "duo" ? "一對二" : "一對一", 教練: r.coachName || "", 收費: r.price || 0, 取消方式: r.cancelledBy === "admin" ? "管理員代取消" : "教練自行取消", 取消時間: r.cancelledAt || "" }));
+      const cxRows = cancelLog.map((r) => ({ 原定日期: r.date, 開始: r.start, 時長小時: r.hours, 類型: r.type === "charter" ? rentalFull(r.charterType) : r.type === "duo" ? "一對二" : "一對一", 教練: r.coachName || "", 收費: r.price || 0, 取消方式: actorLabel(r.cancelledBy), 取消時間: r.cancelledAt || "" }));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cxRows.length ? cxRows : [{ 原定日期: "", 開始: "", 時長小時: "", 類型: "", 教練: "", 收費: "", 取消方式: "", 取消時間: "" }]), "取消記錄");
 
       const today = new Date().toISOString().slice(0, 10);
@@ -880,6 +1112,13 @@ export default function App() {
     });
   });
   myBookings.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
+  // 「距今日最近」排序：純粹按日期同今日嘅距離（唔理過去定未來），唔涉及完成/簽到狀態
+  const myBookingsSorted = (() => {
+    if (myBookingsSortMode !== "closest") return myBookings;
+    const todayMs = new Date(`${formatDate(new Date())}T00:00:00`).getTime();
+    const dist = (d) => Math.abs(new Date(`${d}T00:00:00`).getTime() - todayMs);
+    return [...myBookings].sort((a, b) => dist(a.date) - dist(b.date));
+  })();
 
   // 教練近3個月實際收入（只計有填學生名嘅堂，用 snapshot 收費；扣除租場費用）+ 各學生上堂紀錄（近3個月）
   const myIncomeReport = (() => {
@@ -944,7 +1183,7 @@ export default function App() {
       const date = k.split("_")[0];
       arr.forEach((v) => {
         if (k === `${date}_${v.start}`)
-          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null, students: v.students || [] });
+          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null, students: v.students || [], signatures: v.signatures || {} });
       });
     });
     allBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
@@ -1076,22 +1315,48 @@ export default function App() {
                         </div>
                         {expanded && (
                           <div style={S.purchaseBreakdown}>
-                            {fifo.length === 0 ? <p style={S.emptyText}>暫無購買記錄</p> : fifo.map((b) => {
-                              const isExpired = b.expiryDate && b.remaining > 0 && b.expiryDate < formatDate(new Date());
-                              const isExpiring = !isExpired && b.expiryDate && b.remaining > 0 && expiringBatchesOf(c.id).some((x) => x.id === b.id);
-                              return (
-                                <div key={b.id} style={S.purchaseRow}>
-                                  <div>
-                                    <div style={S.bookingTime}>{b.date}　+{b.qty} 堂　$@{b.rate}</div>
-                                    {b.expiryDate && <div style={{ fontSize: 11, color: isExpired ? "#FF6B6B" : isExpiring ? "#FFB347" : "#666" }}>失效日：{b.expiryDate}{isExpired ? "（已過期）" : isExpiring ? "（快到期）" : ""}</div>}
+                            <div style={{ ...S.segRow, marginBottom: 10 }}>
+                              <button style={coachDrillView === "purchase" ? S.segActive : S.seg} onClick={() => setCoachDrillView("purchase")}>購堂記錄</button>
+                              <button style={coachDrillView === "sessions" ? S.segActive : S.seg} onClick={() => setCoachDrillView("sessions")}>上堂記錄</button>
+                            </div>
+                            {coachDrillView === "purchase" ? (
+                              fifo.length === 0 ? <p style={S.emptyText}>暫無購買記錄</p> : fifo.map((b) => {
+                                const isExpired = b.expiryDate && b.remaining > 0 && b.expiryDate < formatDate(new Date());
+                                const isExpiring = !isExpired && b.expiryDate && b.remaining > 0 && expiringBatchesOf(c.id).some((x) => x.id === b.id);
+                                return (
+                                  <div key={b.id} style={S.purchaseRow}>
+                                    <div>
+                                      <div style={S.bookingTime}>{b.date}　+{b.qty} 堂　$@{b.rate}</div>
+                                      {b.expiryDate && <div style={{ fontSize: 11, color: isExpired ? "#FF6B6B" : isExpiring ? "#FFB347" : "#666" }}>失效日：{b.expiryDate}{isExpired ? "（已過期）" : isExpiring ? "（快到期）" : ""}</div>}
+                                    </div>
+                                    <div style={{ textAlign: "right", fontSize: 12 }}>
+                                      <div style={{ color: "#6BCB77" }}>已用 {b.consumed}</div>
+                                      <div style={{ color: b.remaining > 0 ? "#4ECDC4" : "#555" }}>剩 {b.remaining}</div>
+                                    </div>
                                   </div>
-                                  <div style={{ textAlign: "right", fontSize: 12 }}>
-                                    <div style={{ color: "#6BCB77" }}>已用 {b.consumed}</div>
-                                    <div style={{ color: b.remaining > 0 ? "#4ECDC4" : "#555" }}>剩 {b.remaining}</div>
+                                );
+                              })
+                            ) : (() => {
+                              // 第6項：呢位教練喺「查看月份」（頂部 viewMonth）入面嘅上堂詳情——日期＋時長＋學生名＋有冇簽到
+                              const sessions = allBookings
+                                .filter((b) => b.coachId === c.id && monthKey(b.date) === viewMonth)
+                                .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
+                              return sessions.length === 0 ? <p style={S.emptyText}>{viewMonth} 冇上堂記錄</p> : sessions.map((s, i) => {
+                                const names = s.students && s.students.length > 0 ? s.students : ["（未填學生名）"];
+                                const signedCount = (s.students || []).filter((n) => s.signatures && s.signatures[n]).length;
+                                const totalStudents = (s.students || []).length;
+                                const signLabel = totalStudents === 0 ? "" : signedCount === totalStudents ? "✅ 已簽" : signedCount === 0 ? "⚠️ 未簽" : `${signedCount}/${totalStudents} 已簽`;
+                                return (
+                                  <div key={i} style={S.purchaseRow}>
+                                    <div>
+                                      <div style={S.bookingTime}>{s.date}（{formatDay(new Date(`${s.date}T00:00:00`))}） {s.start}–{addMinutes(s.start, s.hours * 60)}（{s.hours}小時）</div>
+                                      <div style={{ fontSize: 12, color: "#aaa", marginTop: 2 }}>{names.join("、")}　{s.type === "duo" ? "1對2" : "1對1"}</div>
+                                    </div>
+                                    {signLabel && <div style={{ fontSize: 12, color: signedCount === totalStudents ? "#6BCB77" : signedCount === 0 ? "#FF8FA3" : "#FFB347" }}>{signLabel}</div>}
                                   </div>
-                                </div>
-                              );
-                            })}
+                                );
+                              });
+                            })()}
                           </div>
                         )}
                       </div>
@@ -1111,6 +1376,7 @@ export default function App() {
             <div style={S.weekNav}>
               <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
               <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
+              <button style={S.navBtn} onClick={() => setWeekOffset(0)}>今日</button>
               <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
             </div>
             <div style={S.calScroll}>
@@ -1201,13 +1467,47 @@ export default function App() {
                   <div style={{ flex: 1 }}>
                     <div style={S.bookingCoach}>{c.name} <span style={S.idTag}>@{c.username}</span></div>
                     <div style={S.bookingTime}>堂數 {c.used}/{c.credits}　每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
+                    {(() => {
+                      const os = c.onboardingStatus || {};
+                      const done = ["payment", "welcome", "rental", "terms"].filter((k) => os[k]).length;
+                      return done > 0 && done < 4 ? <div style={{ fontSize: 11, color: "#FFB347" }}>Onboarding {done}/4</div> : done === 4 ? <div style={{ fontSize: 11, color: "#6BCB77" }}>Onboarding 完成 ✓</div> : null;
+                    })()}
                   </div>
-                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "" })}>+ 堂</button>
+                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 堂</button>
+                  <button style={S.smallBtn} onClick={() => setCopyInfoModal({ title: "提醒教練補book堂", text: `${c.name}，你好！我哋留意到你可能有堂已經完成，但未喺系統入面 book 返，麻煩補返個記錄，方便計算堂數同流水帳，多謝晒！` })}>⚠️ 提醒</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
                 </div>
               ))}
             </div>
+
+            <div style={{ ...S.flexBetween, marginTop: 24 }}>
+              <h2 style={{ ...S.sectionTitle, marginBottom: 0 }}>共享訓練通行證</h2>
+              <button style={S.addBtn} disabled={coaches.length < 2} onClick={() => setSharedPassModal({ coachIdA: coaches[0]?.id, coachIdB: coaches[1]?.id, date: formatDate(new Date()) })}>+ 開共享 Pass</button>
+            </div>
+            {coaches.length < 2 && <p style={S.assistHint}>要至少2位教練先可以開共享 Pass。</p>}
+            {sharedPasses.length === 0 ? <p style={S.emptyText}>暫無共享 Pass</p> : (
+              <div style={S.bookingList}>
+                {sharedPasses.map((sp) => {
+                  const names = (sp.coachIds || []).map((id) => getCoach(id)?.name || "（已刪除教練）");
+                  const remain = sharedRemaining(sp);
+                  return (
+                    <div key={sp.id} style={S.purchaseRow}>
+                      <div>
+                        <div style={S.bookingCoach}>{names.join(" ＋ ")}</div>
+                        <div style={S.bookingTime}>{sp.purchaseDate}　失效日：{sp.expiryDate || "無限期"}</div>
+                        <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{(sp.coachIds || []).map((id) => `${getCoach(id)?.name || id}用咗${(sp.usageByCoach || {})[id] || 0}hr`).join("　")}</div>
+                      </div>
+                      <div style={{ textAlign: "right", fontSize: 12 }}>
+                        <div style={{ color: "#6BCB77" }}>已用 {sp.usedHours || 0}</div>
+                        <div style={{ color: remain > 0 ? "#4ECDC4" : "#555" }}>剩 {remain} / {sp.totalHours}</div>
+                        <button style={S.linkBtn} onClick={() => setSharedTopUpModal({ sharedId: sp.id, qty: 5 })}>+ 加值</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1237,7 +1537,7 @@ export default function App() {
                     <div style={{ ...S.dot, background: getCoach(r.coachId)?.color || "#666" }} />
                     <div style={{ flex: 1 }}>
                       <div style={S.bookingCoach}>{r.coachName} <span style={S.plusTag}>+{r.qty} 堂</span></div>
-                      <div style={S.bookingTime}>{r.date}　@${r.rate}/堂</div>
+                      <div style={S.bookingTime}>{r.date}　@${r.rate}/堂{r.addedBy ? `　由${r.addedBy === "admin" ? "管理員" : r.addedBy.startsWith("subadmin:") ? `副管理員（${r.addedBy.slice(9)}）` : r.addedBy}新增` : ""}</div>
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={S.revenueNum}>+${r.amount.toLocaleString()}</div>
@@ -1294,6 +1594,8 @@ export default function App() {
                     <option value="private">私人包場</option>
                     <option value="group">小組訓練</option>
                     <option value="trial">試堂</option>
+                    <option value="clean">清潔</option>
+                    <option value="filming">拍片</option>
                   </select>
                   <select style={S.select} value={recRange} onChange={(e) => setRecRange(e.target.value)}>
                     <option value="upcoming">即將</option>
@@ -1349,7 +1651,7 @@ export default function App() {
                       <div style={{ flex: 1 }}>
                         <div style={S.bookingCoach}>
                           {r.type === "charter" ? rentalFull(r.charterType) : r.coachName}{" "}
-                          <span style={S.cancelledTag}>{r.cancelledBy === "admin" ? "管理員代取消" : "教練自行取消"}</span>
+                          <span style={S.cancelledTag}>{actorLabel(r.cancelledBy)}</span>
                         </div>
                         <div style={S.bookingTime}>原定 {r.date} · {r.start}–{addMinutes(r.start, r.hours * 60)}（{r.hours}小時）{r.price ? `　$${r.price}` : ""}</div>
                         <div style={S.bookingTime}>取消於 {r.cancelledAt}</div>
@@ -1372,7 +1674,7 @@ export default function App() {
               <Field label="確認新密碼"><input style={S.input} type="password" value={pwForm.new2} onChange={(e) => setPwForm({ ...pwForm, new2: e.target.value })} /></Field>
               <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
             </div>
-            <p style={S.assistHint}>※ 收費：1對1 用教練每堂租金；1對2 $150/小時，每加0.5小時 +$50</p>
+            <p style={S.assistHint}>※ 教練自己 book 堂：Training Pass 制，$100/小時（1對2 額外多扣0.5小時）。Admin 代教練 book 堂：維持單次收費（1對1 用教練每堂租金；1對2 $150/小時，每加0.5小時 +$50）。</p>
 
             {currentUser.role === "admin" && (
               <>
@@ -1380,6 +1682,21 @@ export default function App() {
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
                   <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
+                </div>
+
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>上傳收款 QR code（例如轉數快／PayMe）。會喺教練 Onboarding 付款資訊同買 Pass 畫面顯示，方便教練掃碼付款。可隨時更換。</p>
+                  {paymentQR ? (
+                    <div style={{ textAlign: "center", marginBottom: 12 }}>
+                      <img src={paymentQR} alt="收款 QR" style={{ maxWidth: 200, width: "100%", borderRadius: 10, background: "#fff", padding: 8, boxSizing: "border-box" }} />
+                    </div>
+                  ) : <p style={S.emptyText}>仲未上傳</p>}
+                  <label style={{ ...S.loginBtn, display: "block", textAlign: "center", cursor: "pointer" }}>
+                    {paymentQR ? "更換 QR Code" : "上傳 QR Code"}
+                    <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleQRUpload(e.target.files?.[0])} />
+                  </label>
+                  {paymentQR && <button style={{ ...S.smallBtn, width: "100%", marginTop: 8 }} onClick={() => setPaymentQR("")}>移除</button>}
                 </div>
 
                 <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
@@ -1409,6 +1726,22 @@ export default function App() {
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
                   <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
+                </div>
+
+                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code（轉數快／PayMe）</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>上傳一張收款 QR Code 圖，將來會顯示喺 Onboarding 付款資訊、教練買 Pass 畫面等地方，方便教練直接掃碼轉數。可隨時重新上傳更換。</p>
+                  {paymentQR && <img src={paymentQR} alt="收款 QR Code" style={{ width: 160, height: 160, objectFit: "contain", background: "#fff", borderRadius: 10, marginBottom: 10 }} />}
+                  <input type="file" accept="image/*" onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => { setPaymentQR(reader.result); showToast("已上傳收款 QR Code"); };
+                    reader.onerror = () => showToast("上傳失敗，請再試一次", "error");
+                    reader.readAsDataURL(file);
+                    e.target.value = "";
+                  }} />
+                  {paymentQR && <button style={{ ...S.smallBtn, marginTop: 10 }} onClick={() => { setPaymentQR(""); showToast("已移除收款 QR Code"); }}>移除</button>}
                 </div>
 
                 <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
@@ -1487,6 +1820,30 @@ export default function App() {
 
         {editCoach && (
           <EditCoachModal coach={editCoach} onClose={() => setEditCoach(null)}
+            onOnboardingSend={(stepKey, coachName, initialPassHours, phone) => {
+              let text = "";
+              if (stepKey === "fee") text = onboardingFeeSheetText();
+              else if (stepKey === "guide") text = onboardingVenueRulesText();
+              else if (stepKey === "payment") {
+                const hrs = initialPassHours === "" || initialPassHours === null || initialPassHours === undefined ? NaN : Number(initialPassHours);
+                if (!hrs || hrs <= 0) { showToast("請先輸入初始 Pass 時數，先會生成付款資訊文字", "error"); return false; }
+                text = onboardingPaymentInfoText(hrs);
+              }
+              else if (stepKey === "welcome") text = onboardingWelcomeText(coachName);
+              else if (stepKey === "rental") text = onboardingRentalGuideText();
+              else if (stepKey === "terms") text = onboardingTermsText();
+              const stepLabels = { fee: "收費表", guide: "場地守則", payment: "付款資訊", welcome: "歡迎訊息", rental: "租場須知", terms: "使用條款" };
+              if (phone) {
+                window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, "_blank");
+              } else {
+                setCopyInfoModal({ title: `Onboarding：${stepLabels[stepKey] || ""}`, text });
+              }
+              const trackedKeys = ["payment", "welcome", "rental", "terms"];
+              if (trackedKeys.includes(stepKey) && editCoach?.id) {
+                setCoaches((prev) => prev.map((c) => c.id === editCoach.id ? { ...c, onboardingStatus: { ...(c.onboardingStatus || {}), [stepKey]: true } } : c));
+              }
+              return true;
+            }}
             onSave={(data) => {
               const uname = (data.username || "").trim().toLowerCase();
               if (!uname) { showToast("請輸入帳號名稱", "error"); return; }
@@ -1497,10 +1854,10 @@ export default function App() {
               if (clean.id) { setCoaches((prev) => prev.map((c) => c.id === clean.id ? { ...c, ...clean } : c)); showToast("已更新教練"); }
               else {
                 const newId = Math.max(0, ...coaches.map((c) => c.id)) + 1;
-                const color = COLORS[coaches.length % COLORS.length];
+                const color = coachColorFromId(newId);
                 const initials = clean.name.trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "NA";
                 setCoaches((prev) => [...prev, { ...clean, id: newId, color, initials, used: 0 }]);
-                if (clean.credits > 0) setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: new Date().toISOString().slice(0, 10), coachId: newId, coachName: clean.name, qty: clean.credits, amount: clean.credits * clean.rate, rate: clean.rate }, ...prev]);
+                if (clean.credits > 0) setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: new Date().toISOString().slice(0, 10), coachId: newId, coachName: clean.name, qty: clean.credits, amount: clean.credits * clean.rate, rate: clean.rate, addedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin" }, ...prev]);
                 showToast(`已新增教練 ${clean.name}（@${uname}）`);
               }
               setEditCoach(null);
@@ -1510,14 +1867,35 @@ export default function App() {
         {addCreditModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>增加堂數</h3>
-            <p style={S.modalText}>{getCoach(addCreditModal.coachId)?.name}　每堂 ${getCoach(addCreditModal.coachId)?.rate}</p>
-            <Field label="增加幾多堂"><input style={S.input} type="number" min="1" value={addCreditModal.qty} onChange={(e) => setAddCreditModal({ ...addCreditModal, qty: parseInt(e.target.value) || 1 })} /></Field>
+            <p style={S.modalText}>{getCoach(addCreditModal.coachId)?.name}</p>
+            <label style={S.label}>Pass 類型</label>
+            <div style={{ ...S.segRow, flexWrap: "wrap" }}>
+              <button style={addCreditModal.passType === "personal" ? S.segActive : S.seg}
+                onClick={() => setAddCreditModal({ ...addCreditModal, passType: "personal", qty: PERSONAL_PASS_HOURS, date: addCreditModal.date || formatDate(new Date()), expiryDate: addMonthsToDate(addCreditModal.date || formatDate(new Date()), PERSONAL_PASS_MONTHS) })}>
+                個人證（{PERSONAL_PASS_HOURS}hr／solo限定）
+              </button>
+              <button style={addCreditModal.passType === "flexible" ? S.segActive : S.seg}
+                onClick={() => setAddCreditModal({ ...addCreditModal, passType: "flexible", qty: FLEXIBLE_PASS_HOURS, date: addCreditModal.date || formatDate(new Date()), expiryDate: addMonthsToDate(addCreditModal.date || formatDate(new Date()), FLEXIBLE_PASS_MONTHS) })}>
+                彈性證（{FLEXIBLE_PASS_HOURS}hr／全類型）
+              </button>
+              <button style={!addCreditModal.passType ? S.segActive : S.seg}
+                onClick={() => setAddCreditModal({ ...addCreditModal, passType: "", qty: 1 })}>
+                自訂（不限類型）
+              </button>
+            </div>
+            {addCreditModal.passType === "personal" && <p style={S.assistHint}>個人訓練通行證：淨係可以用嚟 book 1對1，唔可以book 1對2。</p>}
+            {addCreditModal.passType === "flexible" && <p style={S.assistHint}>彈性訓練通行證：1對1／1對2／包場都用得。</p>}
+            <Field label="小時數（可 0.5 為一格）"><input style={S.input} type="number" step="0.5" min="0.5" value={addCreditModal.qty} onChange={(e) => setAddCreditModal({ ...addCreditModal, qty: e.target.value })} /></Field>
             <Field label="增加日期"><input style={S.input} type="date" value={addCreditModal.date || formatDate(new Date())} onChange={(e) => setAddCreditModal({ ...addCreditModal, date: e.target.value })} /></Field>
-            <Field label="失效日期（留空＝無限期）"><input style={S.input} type="date" value={addCreditModal.expiryDate || ""} onChange={(e) => setAddCreditModal({ ...addCreditModal, expiryDate: e.target.value })} /></Field>
-            <p style={S.amountPreview}>金額：${((getCoach(addCreditModal.coachId)?.rate || 0) * addCreditModal.qty).toLocaleString()}</p>
+            <Field label="失效日期（留空＝無限期；過咗期都仍然可以用，只係會提示教練）"><input style={S.input} type="date" value={addCreditModal.expiryDate || ""} onChange={(e) => setAddCreditModal({ ...addCreditModal, expiryDate: e.target.value })} /></Field>
+            {addCreditModal.passType ? (
+              <p style={S.amountPreview}>Pass 制：買咗之後一律 ${PASS_HOURLY_RATE}/小時計算（book 堂嗰陣先收，呢度唔預收費用）</p>
+            ) : (
+              <p style={S.amountPreview}>金額：${((getCoach(addCreditModal.coachId)?.rate || 0) * (Number(addCreditModal.qty) || 0)).toLocaleString()}</p>
+            )}
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setAddCreditModal(null)}>取消</button>
-              <button style={S.modalConfirm} onClick={() => { addCredits(addCreditModal.coachId, addCreditModal.qty, addCreditModal.date, addCreditModal.expiryDate); setAddCreditModal(null); }}>確認增加</button>
+              <button style={S.modalConfirm} onClick={() => { const qty = Number(addCreditModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效堂數", "error"); return; } addCredits(addCreditModal.coachId, qty, addCreditModal.date, addCreditModal.expiryDate, addCreditModal.passType || null); setAddCreditModal(null); }}>確認增加</button>
             </div>
           </div></div>
         )}
@@ -1566,7 +1944,7 @@ export default function App() {
               <div style={{ marginTop: 8 }}>
                 <label style={S.label}>自訂時長（小時，可 0.25 為一格）</label>
                 <input style={S.input} type="number" step="0.25" min="0.25" value={charterModal.hours}
-                  onChange={(e) => setCharterModal({ ...charterModal, hours: parseFloat(e.target.value) || 0.25 })} />
+                  onChange={(e) => setCharterModal({ ...charterModal, hours: e.target.value })} />
               </div>
             )}
 
@@ -1670,7 +2048,7 @@ export default function App() {
 
         {copyInfoModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
-            <h3 style={S.modalTitle}>預約成功</h3>
+            <h3 style={S.modalTitle}>{copyInfoModal.title || "預約成功"}</h3>
             <p style={S.modalText}>複製落面文字，自行 send 畀教練（系統冇存教練電話，唔會自動發送）</p>
             <textarea style={{ ...S.input, minHeight: 100, resize: "vertical", textAlign: "left" }} readOnly value={copyInfoModal.text} onFocus={(e) => e.target.select()} />
             <div style={S.modalBtns}>
@@ -1812,6 +2190,7 @@ export default function App() {
           <div style={S.weekNav}>
             <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
             <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
+            <button style={S.navBtn} onClick={() => setWeekOffset(0)}>今日</button>
             <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
           </div>
           <p style={S.gridHint}>每格 15 分鐘　｜　同一時段最多 2 名教練　｜　按空格揀 1對1/1對2 同時長</p>
@@ -1910,6 +2289,45 @@ export default function App() {
               </div>
             );
           })()}
+          {(() => {
+            // 第9項：我的 Pass 資訊panel——個人/彈性/共享 breakdown，共享嗰張可以自己加值
+            const pRemain2 = personalRemaining(currentUser.id);
+            const fRemain2 = flexibleRemaining(currentUser.id);
+            const myShared = sharedPassesOf(currentUser.id);
+            const hasAnyPass = pRemain2 > 0 || fRemain2 > 0 || myShared.length > 0 || purchaseLog.some((r) => r.coachId === currentUser.id && r.passType);
+            if (!hasAnyPass) return null;
+            return (
+              <div style={{ ...S.formCard, marginBottom: 14 }}>
+                <div style={{ ...S.assistHint, marginBottom: 6 }}>我的 Training Pass</div>
+                {pRemain2 > 0 && <div style={S.bookingTime}>個人證（solo限定）剩 {pRemain2} 小時</div>}
+                {fRemain2 > 0 && <div style={S.bookingTime}>彈性／舊制剩 {fRemain2} 小時</div>}
+                {myShared.map((sp) => {
+                  const other = (sp.coachIds || []).find((id) => id !== currentUser.id);
+                  return (
+                    <div key={sp.id} style={{ ...S.flexBetween, marginTop: 4 }}>
+                      <span style={S.bookingTime}>共享 Pass（同 {getCoach(other)?.name || "?"}）剩 {sharedRemaining(sp)} / {sp.totalHours} 小時</span>
+                      <button style={S.linkBtn} onClick={() => setSharedTopUpModal({ sharedId: sp.id, qty: 5 })}>+ 加值</button>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {(() => {
+            // 第9-3項：Pass 用晒／過期提醒（純banner，過期唔會鎖，淨係提示）
+            const pRemain = personalRemaining(currentUser.id);
+            const fRemain = flexibleRemaining(currentUser.id);
+            const hasAnyPassPurchase = purchaseLog.some((r) => r.coachId === currentUser.id && r.passType);
+            const usedUp = hasAnyPassPurchase && pRemain <= 0 && fRemain <= 0;
+            const expiredBatches = expiredPassBatchesOf(currentUser.id);
+            if (!usedUp && expiredBatches.length === 0) return null;
+            return (
+              <div style={{ ...S.noticeBanner, background: "#332a0f" }}>
+                {usedUp && <div>⚠️ 你嘅 Training Pass 時數已經用晒，請聯絡 admin 購買新 Pass。</div>}
+                {expiredBatches.length > 0 && <div>⏰ 你有 Pass 已經過期（仍然可以用）：{expiredBatches.map((b) => `${b.remaining}小時@${b.expiryDate}`).join("、")}</div>}
+              </div>
+            );
+          })()}
           <div style={S.flexBetween}>
             <h2 style={S.sectionTitle}>我的預約記錄</h2>
             <div style={S.segRow}>
@@ -1917,11 +2335,18 @@ export default function App() {
               <button style={myBookingsView === "calendar" ? S.segActive : S.seg} onClick={() => setMyBookingsView("calendar")}>📅 圖像</button>
             </div>
           </div>
+          {myBookingsView === "list" && (
+            <div style={{ ...S.segRow, marginTop: 8 }}>
+              <button style={myBookingsSortMode === "newest" ? S.segActive : S.seg} onClick={() => setMyBookingsSortMode("newest")}>新到舊</button>
+              <button style={myBookingsSortMode === "closest" ? S.segActive : S.seg} onClick={() => setMyBookingsSortMode("closest")}>距今日最近</button>
+            </div>
+          )}
           {myBookingsView === "calendar" ? (
             <div style={{ marginTop: 14 }}>
               <div style={S.weekNav}>
                 <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
                 <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
+                <button style={S.navBtn} onClick={() => setWeekOffset(0)}>今日</button>
                 <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
               </div>
               <p style={S.gridHint}>自己嘅課堂正常顯示學生名；其他教練嗰格縮細留白，淨係睇到「有人」，等你一眼睇晒成個禮拜邊忙邊閒。撳「列表」可以管理／取消你自己嘅預約</p>
@@ -1970,9 +2395,9 @@ export default function App() {
                 </table>
               </div>
             </div>
-          ) : myBookings.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
+          ) : myBookingsSorted.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
             <div style={S.bookingList}>
-              {myBookings.map(({ date, start, hours, type, charterType, coachName, students, signatures }, i) => {
+              {myBookingsSorted.map(({ date, start, hours, type, charterType, coachName, students, signatures }, i) => {
                 const hrs = hoursUntil(date, start);
                 const isPast = hrs < 0;
                 const isFilming = type === "charter" && charterType === "filming";
@@ -2098,15 +2523,30 @@ export default function App() {
                         <span style={S.assistHint}>學生資料</span>
                         <button style={S.rosterRemoveBtn} onClick={() => removeStudent(s.name)}>刪除學生</button>
                       </div>
-                      <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0" value={s.rate}
-                        onChange={(e) => updateStudentField(s.name, "rate", parseInt(e.target.value) || 0)} /></Field>
+                      <Field label="每堂收費 ($)"><input style={S.input} type="number" min="0"
+                        value={studentDrafts[`${s.name}_rate`] !== undefined ? studentDrafts[`${s.name}_rate`] : s.rate}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setStudentDrafts((prev) => ({ ...prev, [`${s.name}_rate`]: v }));
+                          if (v !== "") updateStudentField(s.name, "rate", Number(v) || 0);
+                        }}
+                        onBlur={() => setStudentDrafts((prev) => { const n = { ...prev }; delete n[`${s.name}_rate`]; return n; })} /></Field>
                       <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂</div>
                       <Field label="剩餘堂數">
                         <input style={{ ...S.input, borderColor: low ? "#5a2020" : undefined, color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}
-                          type="number" value={remain}
-                          onChange={(e) => setStudentRemain(s.name, parseInt(e.target.value) || 0)} />
+                          type="number"
+                          value={studentDrafts[`${s.name}_remain`] !== undefined ? studentDrafts[`${s.name}_remain`] : remain}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setStudentDrafts((prev) => ({ ...prev, [`${s.name}_remain`]: v }));
+                            if (v !== "") setStudentRemain(s.name, Number(v) || 0);
+                          }}
+                          onBlur={() => setStudentDrafts((prev) => { const n = { ...prev }; delete n[`${s.name}_remain`]; return n; })} />
                       </Field>
-                      <button style={{ ...S.creditBtn, marginTop: 4, marginBottom: 14 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1, date: formatDate(new Date()), expiryDate: "" })}>+ 幫佢開堂數</button>
+                      <div style={{ display: "flex", gap: 8, marginTop: 4, marginBottom: 14 }}>
+                        <button style={{ ...S.creditBtn, flex: 1 }} onClick={() => setAddStudentCreditModal({ name: s.name, qty: 1, date: formatDate(new Date()), expiryDate: "" })}>+ 幫佢開堂數</button>
+                        <button style={{ ...S.smallBtn, flex: 1 }} onClick={() => setSigReportModal({ studentName: s.name, month: monthKey(formatDate(new Date())) })}>📄 簽到月報表</button>
+                      </div>
 
                       <div style={{ ...S.assistHint, marginBottom: 4 }}>購堂紀錄</div>
                       {(() => {
@@ -2184,10 +2624,18 @@ export default function App() {
       {bookModal && (() => {
         const isDuo = bookModal.sessionType === "duo";
         const isFilming = bookModal.sessionType === "filming";
-        const price = isDuo ? duoPrice(bookModal.hours) : liveUser.rate * bookModal.hours;
+        const passCost = isDuo ? bookModal.hours + 0.5 : bookModal.hours;
+        const price = passCost * 100;
         const allowSolo = liveUser.allowSolo !== false;
         const allowDuo = liveUser.allowDuo !== false;
         const allowFilming = liveUser.allowFilming === true;
+        const pRemain = personalRemaining(currentUser.id);
+        const fRemain = flexibleRemaining(currentUser.id);
+        const poolLabel = !isFilming ? (
+          bookModal.sessionType === "solo" && pRemain >= passCost ? "個人證" :
+          fRemain >= passCost ? "彈性／舊制" :
+          sharedPassesOf(currentUser.id).some((sp) => sharedRemaining(sp) >= passCost) ? "共享 Pass" : "時數不足"
+        ) : "";
         return (
           <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
             <h3 style={{ ...S.modalTitle, textAlign: "center" }}>預約場地</h3>
@@ -2234,7 +2682,7 @@ export default function App() {
                     <button key={w} style={(bookModal.repeatWeeks || 1) === w ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, repeatWeeks: w })}>{w === 1 ? "唔重複" : `${w}週`}</button>
                   ))}
                 </div>
-                {(bookModal.repeatWeeks || 1) > 1 && <p style={S.assistHint}>會一次過幫你book未來 {bookModal.repeatWeeks} 個星期嘅同一個時段；如果某一週已經被佔用或堂數不足，會自動跳過嗰一週，唔影響其他週。</p>}
+                {(bookModal.repeatWeeks || 1) > 1 && <p style={S.assistHint}>會一次過幫你book未來 {bookModal.repeatWeeks} 個星期嘅同一個時段；如果某一週已經被佔用或Pass時數不足，會自動跳過嗰一週，唔影響其他週。</p>}
               </>
             )}
             <div style={S.priceBox}>
@@ -2243,7 +2691,8 @@ export default function App() {
                 <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>拍片</span><span>$0（唔扣堂數）</span></div>
               ) : (
                 <>
-                  <div style={S.priceRow}><span>扣堂數</span><span>{bookModal.hours} 堂{(bookModal.repeatWeeks || 1) > 1 ? `（每週，最多扣 ${bookModal.hours * bookModal.repeatWeeks} 堂）` : ""}</span></div>
+                  <div style={S.priceRow}><span>扣 Pass 時數</span><span>{passCost} 小時{isDuo ? "（1對2額外+0.5）" : ""}{(bookModal.repeatWeeks || 1) > 1 ? `（每週，最多扣 ${(passCost * bookModal.repeatWeeks).toFixed(1)} 小時）` : ""}</span></div>
+                  <div style={S.priceRow}><span>扣邊個池</span><span>{poolLabel}</span></div>
                   <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>{isDuo ? "1對2 收費" : "1對1 收費"}</span><span>${price}{(bookModal.repeatWeeks || 1) > 1 ? "／週" : ""}</span></div>
                 </>
               )}
@@ -2276,14 +2725,55 @@ export default function App() {
           <h3 style={S.modalTitle}>幫學生開堂數</h3>
           <p style={S.modalText}>{addStudentCreditModal.name}</p>
           <Field label="增加幾多堂"><input style={S.input} type="number" min="1" value={addStudentCreditModal.qty}
-            onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, qty: parseInt(e.target.value) || 1 })} /></Field>
+            onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, qty: e.target.value })} /></Field>
           <Field label="增加日期"><input style={S.input} type="date" value={addStudentCreditModal.date || formatDate(new Date())}
             onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, date: e.target.value })} /></Field>
           <Field label="失效日期（可選，留空＝冇限期）"><input style={S.input} type="date" value={addStudentCreditModal.expiryDate || ""}
             onChange={(e) => setAddStudentCreditModal({ ...addStudentCreditModal, expiryDate: e.target.value })} /></Field>
           <div style={S.modalBtns}>
             <button style={S.modalCancel} onClick={() => setAddStudentCreditModal(null)}>取消</button>
-            <button style={S.modalConfirm} onClick={() => { addStudentCredits(addStudentCreditModal.name, addStudentCreditModal.qty, addStudentCreditModal.date, addStudentCreditModal.expiryDate); setAddStudentCreditModal(null); }}>確認增加</button>
+            <button style={S.modalConfirm} onClick={() => { const qty = Number(addStudentCreditModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效堂數", "error"); return; } addStudentCredits(addStudentCreditModal.name, qty, addStudentCreditModal.date, addStudentCreditModal.expiryDate); setAddStudentCreditModal(null); }}>確認增加</button>
+          </div>
+        </div></div>
+      )}
+      {sharedPassModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>開共享訓練通行證</h3>
+          <p style={S.assistHint}>{SHARED_PASS_HOURS}小時／{SHARED_PASS_MONTHS}個月，硬性限制2位教練，任何一位或 admin 都可以之後幫呢張 Pass 加值。</p>
+          <label style={S.label}>教練 A</label>
+          <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={sharedPassModal.coachIdA} onChange={(e) => setSharedPassModal({ ...sharedPassModal, coachIdA: Number(e.target.value) })}>
+            {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <label style={{ ...S.label, marginTop: 10 }}>教練 B</label>
+          <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={sharedPassModal.coachIdB} onChange={(e) => setSharedPassModal({ ...sharedPassModal, coachIdB: Number(e.target.value) })}>
+            {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <Field label="開始日期"><input style={S.input} type="date" value={sharedPassModal.date || formatDate(new Date())} onChange={(e) => setSharedPassModal({ ...sharedPassModal, date: e.target.value })} /></Field>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setSharedPassModal(null)}>取消</button>
+            <button style={S.modalConfirm} onClick={() => { createSharedPass(sharedPassModal.coachIdA, sharedPassModal.coachIdB, sharedPassModal.date); setSharedPassModal(null); }}>確認開卡</button>
+          </div>
+        </div></div>
+      )}
+      {sharedTopUpModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>幫共享 Pass 加值</h3>
+          <Field label="加幾多小時"><input style={S.input} type="number" step="0.5" min="0.5" value={sharedTopUpModal.qty} onChange={(e) => setSharedTopUpModal({ ...sharedTopUpModal, qty: e.target.value })} /></Field>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setSharedTopUpModal(null)}>取消</button>
+            <button style={S.modalConfirm} onClick={() => { const qty = Number(sharedTopUpModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效小時數", "error"); return; } addSharedPassHours(sharedTopUpModal.sharedId, qty); setSharedTopUpModal(null); }}>確認加值</button>
+          </div>
+        </div></div>
+      )}
+      {sigReportModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>簽到月報表</h3>
+          <p style={S.modalText}>{sigReportModal.studentName}</p>
+          <Field label="月份"><input style={S.select} type="month" value={sigReportModal.month} onChange={(e) => setSigReportModal({ ...sigReportModal, month: e.target.value })} /></Field>
+          <p style={S.assistHint}>會生成一份 PDF，列出呢個月全部上堂記錄（連簽名圖），冇簽到嘅堂會標記「未簽」。</p>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setSigReportModal(null)}>取消</button>
+            <button style={S.modalConfirm} onClick={async () => { await generateSignatureReportPDF(sigReportModal.studentName, sigReportModal.month); setSigReportModal(null); }}>生成 PDF</button>
           </div>
         </div></div>
       )}

@@ -129,7 +129,7 @@ export const S = {
   priceBox: { background: "#222", borderRadius: 10, padding: "12px 14px", margin: "16px 0" },
   priceRow: { display: "flex", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "3px 0" },
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 },
-  signCanvas: { width: "100%", height: 160, background: "#fff", borderRadius: 10, touchAction: "none", display: "block" },
+  signCanvas: { width: "100%", height: 240, background: "#fff", borderRadius: 10, touchAction: "none", display: "block" },
   signRow: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 },
   qrBtn: { background: "#13302e", border: "1px solid #1d3a2a", color: "#4ECDC4", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer", marginTop: 6 },
   signChip: { background: "#2a2a2a", border: "1px solid #333", color: "#FFB347", borderRadius: 12, padding: "4px 10px", fontSize: 11, cursor: "pointer" },

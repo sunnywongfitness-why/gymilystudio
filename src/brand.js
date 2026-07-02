@@ -22,6 +22,14 @@ export const DUO_HALF_HOUR_ADD = 50; // 一對二每加0.5小時加幾多
 export const CHARTER_PRICE = 300; // 包場/小組 每節價錢（admin 落單時仍可自由改）
 export const ASSIST_CANCEL_LIMIT = 1; // 每位教練每月「24小時內代取消」額度
 export const LOW_CREDIT_THRESHOLD = 2; // 剩餘堂數 ≤ 此數 視為快用完
+// ---- Training Pass 制度（第9項）：教練買咗Pass之後，一律用 PASS_HOURLY_RATE 計費，唔理solo/duo/包場 ----
+export const PASS_HOURLY_RATE = 100; // Pass 制下，每小時收費
+export const PERSONAL_PASS_HOURS = 10; // 個人訓練通行證：時數
+export const PERSONAL_PASS_MONTHS = 6; // 個人訓練通行證：有效期（月）
+export const FLEXIBLE_PASS_HOURS = 15; // 彈性訓練通行證：時數
+export const FLEXIBLE_PASS_MONTHS = 12; // 彈性訓練通行證：有效期（月）
+export const SHARED_PASS_HOURS = 30; // 共享訓練通行證：時數
+export const SHARED_PASS_MONTHS = 12; // 共享訓練通行證：有效期（月）
 export const CLOSED_DAYS = []; // 休息日，例如 [5] = 逢星期五休息。getDay(): 日0 一1 二2 三3 四4 五5 六6
 export const OPEN_HOUR = 7; // 場地開放時間（24小時制）
 export const CLOSE_HOUR = 22; // 場地關閉時間
@@ -33,3 +41,122 @@ export const DEFAULT_SUBADMINS = [
   { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
 ];
 export const DEFAULT_COACHES = [];
+
+// ---- 教練 Onboarding（第10項）----
+export const BANK_NAME = "BEA";
+export const FPS_ID = "130208986";
+export const BANK_PAYEE_NAME = "GYMILY STUDIO LIMITED";
+export const SINGLE_CHARGE_PRICES = { solo: 200, duo: 250, private: 300 }; // 單次收費價目表（獨立於 Training Pass 制，純顯示用，畀新教練參考）
+
+export function onboardingFeeSheetText() {
+  return `📌 Gymily Studio 收費表
+
+💵 單次收費
+1對1 　$${SINGLE_CHARGE_PRICES.solo} / 小時
+1對2 　$${SINGLE_CHARGE_PRICES.duo} / 小時
+包場（3人或以上）　$${SINGLE_CHARGE_PRICES.private} / 小時
+
+－－－－－－－－－－
+
+⭐ Training Pass｜訓練通行證
+
+【個人訓練通行證】
+🎫 ${PERSONAL_PASS_HOURS}小時訓練時數
+適用於：1對1私人訓練
+特色：適合固定進行個人訓練，簡單直接，適合個人會員
+有效期：${PERSONAL_PASS_MONTHS}個月
+
+【彈性訓練通行證】⭐
+🎫 ${FLEXIBLE_PASS_HOURS}小時訓練時數
+適用於：1對1私人訓練、1對2雙人訓練、包場訓練（3人或以上）
+特色：可自由選擇不同訓練模式，適合需要更高彈性的長期訓練會員
+有效期：${FLEXIBLE_PASS_MONTHS}個月
+
+－－－－－－－－－－
+
+✨ 買咗Training Pass之後，一律 $${PASS_HOURLY_RATE}/小時計算
+（1對2堂會喺原定時長之上，額外多扣0.5小時額度）`;
+}
+
+export function onboardingVenueRulesText() {
+  return `📌 場地使用守則
+
+✅ 愛惜器材、保持整潔
+✅ 注意安全，發現器材異常請即時通知
+✅ 場地設有24小時 CCTV
+
+－－－－－－－－－－
+
+離場程序：
+器材歸位 → 槓片拆除 → 關閉冷氣 → 關閉燈光 → 關閉其他設備`;
+}
+
+// 付款資訊：按「初始Pass時數」動態生成。hours 可以係 "" / null / undefined（未輸入），呢種情況要交畀 UI 判斷唔生成
+export function onboardingPaymentInfoText(hours) {
+  const bankBlock = `💵 付款方式
+・請將費用轉帳至指定戶口
+・完成付款後，請將付款紀錄發送予我們確認
+
+🏦 ${BANK_NAME}
+轉數快識別碼：${FPS_ID}
+收款人名稱：${BANK_PAYEE_NAME}`;
+  if (hours <= 5) {
+    return `📌 課程資料
+
+方案：首次Pass — ${hours}小時場地使用
+
+－－－－－－－－－－
+
+${bankBlock}`;
+  }
+  return `📌 課程資料
+
+方案：${hours}小時場地使用
+📅 有效期：付款日起計 6個月內使用完畢
+
+－－－－－－－－－－
+
+${bankBlock}
+
+－－－－－－－－－－
+
+收到付款確認後，我們會為你登記使用堂數及有效期限，之後可按需要預約場地使用時間。`;
+}
+
+export function onboardingWelcomeText(coachName) {
+  return `${coachName}， 🎉 多謝你考慮加入 ${BRAND_NAME}！
+
+接下來會分幾次send返幾份重要資訊畀你：
+・租場須知
+・使用條款
+
+麻煩你逐一查閱，有問題隨時搵我哋。
+
+準備好之後，就可以開始租場同接受預約喇！`;
+}
+
+export function onboardingRentalGuideText() {
+  return `📌 租場須知
+
+✅ 預約
+・預約制，先預約先安排
+・最少24小時前預約
+・增加人數需提前通知
+
+✅ 更改及取消
+・最少24小時通知
+・逾時按原定安排處理`;
+}
+
+export function onboardingTermsText() {
+  return `📌 使用條款
+
+Training Pass：
+・不設退款，不可兌換現金
+・有效期後失效，一般不延期（特殊情況除外）
+・除共享Pass外，不得轉讓
+
+－－－－－－－－－－
+
+如有查詢，歡迎隨時聯絡工作室。`;
+}
