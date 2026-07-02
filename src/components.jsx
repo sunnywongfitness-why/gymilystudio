@@ -38,7 +38,7 @@ export function EditCoachModal({ coach, onClose, onSave, onOnboardingSend }) {
       <Field label="登入帳號名稱"><input style={S.input} value={form.username} placeholder="例如 alex（登入用，不分大小寫）" onChange={(e) => setForm({ ...form, username: e.target.value })} /></Field>
       <Field label="電話號碼（admin專用，教練自己睇唔到，方便send WhatsApp）"><input style={S.input} value={form.phone} placeholder="例如 85291234567" onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^0-9]/g, "") })} /></Field>
       {coach.id ? (
-        <Field label="總購買堂數"><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: e.target.value })} /></Field>
+        <Field label="總購買時數（小時）"><input style={S.input} type="number" value={form.credits} onChange={(e) => setForm({ ...form, credits: e.target.value })} /></Field>
       ) : (
         <>
           <Field label="初始購買時數（小時）— 會自動計入總時數"><input style={S.input} type="number" step="0.5" min="0" value={form.initialPassHours} onChange={(e) => setForm({ ...form, initialPassHours: e.target.value, credits: e.target.value })} /></Field>

@@ -269,14 +269,14 @@ export default function App() {
 
   const openBook = (date, time) => {
     if (isClosedDay(date)) return showToast("星期四、五休息，不開放預約", "error");
-    if (soldOut) return showToast("你已用晒購買堂數，請聯絡管理員增購", "error");
+    if (soldOut) return showToast("你已用晒購買時數，請聯絡管理員增購", "error");
     const allowSolo = liveUser.allowSolo !== false;
     const allowDuo = liveUser.allowDuo !== false;
     if (!allowSolo && !allowDuo) return showToast("你冇任何可用嘅預約類型，請聯絡管理員設定", "error");
     setBookModal({ date, time, sessionType: allowSolo ? "solo" : "duo", hours: 1, students: [], studentOther: "" });
   };
 
-  // 教練自己落拍片（要有「允許拍片」權限）：佔全場、$0、唔扣堂數，對冇權限嘅教練當空格
+  // 教練自己落拍片（要有「允許拍片」權限）：佔全場、$0、唔扣時數，對冇權限嘅教練當空格
   const confirmFilmingBooking = () => {
     const { date, time, hours } = bookModal;
     if (liveUser.allowFilming !== true) { showToast("你冇拍片權限", "error"); return; }
@@ -540,14 +540,14 @@ export default function App() {
     setCharterModal(null);
   };
 
-  // Admin 代教練 book 堂：同教練自己 book 嘅邏輯一樣（扣嗰位教練嘅堂數），完成後生成一段文字畀 admin 自己複製去send
+  // Admin 代教練 book 堂：同教練自己 book 嘅邏輯一樣（扣嗰位教練嘅時數），完成後生成一段文字畀 admin 自己複製去send
   const confirmAdminCoachBooking = () => {
     const { date, time, coachId, sessionType, hours, students } = adminCoachBookModal;
     const coach = getCoach(coachId);
     if (!coach) { showToast("請揀教練", "error"); return; }
-    const creditCost = hours;
+    const creditCost = sessionType === "duo" ? hours + 0.5 : hours; // 同教練自己book（confirmBook）睇齊：duo 都要多扣0.5小時，等個共用池嘅「1單位=$100」估值喺兩條path都啱數（唔改收費本身，$150依然係$150）
     const remain = coach.credits - coach.used;
-    if (creditCost > remain) { showToast(`${coach.name} 剩餘堂數不足`, "error"); return; }
+    if (creditCost > remain) { showToast(`${coach.name} 剩餘時數不足`, "error"); return; }
     const err = canPlace(date, time, hours, 1, coachId);
     if (err) { showToast(err, "error"); return; }
     const price = sessionType === "duo" ? duoPrice(hours) : coach.rate * hours;
@@ -633,8 +633,9 @@ export default function App() {
         setPassUsageLog((prev) => prev.filter((x) => x.id !== meta.passLogId));
         setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - (meta.passCost || meta.hours)) } : c));
       } else {
-        // 冇 passPool 標記：舊制／Admin代教練book嘅單次收費堂，退返原本嘅堂數（rate-based，唔涉及Pass）
-        setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - meta.hours) } : c));
+        // 冇 passPool 標記：舊制／Admin代教練book嘅單次收費堂，退返原本嘅時數（duo 都要退多0.5，同扣減嗰刻對稱）
+        const refundAmount = meta.type === "duo" ? meta.hours + 0.5 : meta.hours;
+        setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - refundAmount) } : c));
       }
       // 由管理員協助、而且係該教練設定嘅通知時數內取消，計入本月額度
       const win = getCoach(coachId)?.cancelWindowHours ?? 24;
@@ -868,7 +869,7 @@ export default function App() {
     showToast(`已為共享 Pass 增加 ${qty} 小時`);
   };
 
-  // FIFO：將某教練嘅 used 堂數，依購買時間順序分配到每筆購買記錄，計出每筆嘅「已用／剩餘」
+  // FIFO：將某教練嘅 used 時數，依購買時間順序分配到每筆購買記錄，計出每筆嘅「已用／剩餘」
   const purchaseFifoStatus = (coachId) => {
     const batches = purchaseLog.filter((r) => r.coachId === coachId).slice().sort((a, b) => a.date.localeCompare(b.date));
     const coach = getCoach(coachId);
@@ -880,7 +881,7 @@ export default function App() {
     });
   };
 
-  // 邊位教練有「未用完、已過期或快過期」嘅堂數（用嚎提醒管理員／教練）
+  // 邊位教練有「未用完、已過期或快過期」嘅時數（用嚎提醒管理員／教練）
   const EXPIRY_WARN_DAYS = 14;
   const expiringBatchesOf = (coachId) => {
     const today = formatDate(new Date());
@@ -1175,22 +1176,22 @@ export default function App() {
 
       // 1) 教練總覽
       const coachRows = coaches.map((c) => ({
-        教練: c.name, 帳號: c.username, 已購買堂數: c.credits, 已用堂數: c.used,
-        剩餘堂數: c.credits - c.used, 每堂租金: c.rate,
+        教練: c.name, 帳號: c.username, 已購買時數: c.credits, 已用時數: c.used,
+        剩餘時數: c.credits - c.used, 代book每堂租金: c.rate,
         總付款: purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.amount, 0)
           + Math.max(0, c.credits - purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.qty, 0)) * c.rate,
       }));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(coachRows), "教練總覽");
 
       // 2) 流水帳（全部）
-      const ledgerRows = purchaseLog.map((r) => ({ 日期: r.date, 教練: r.coachName, 增加堂數: r.qty, 每堂: r.rate, 金額: r.amount }));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ledgerRows.length ? ledgerRows : [{ 日期: "", 教練: "", 增加堂數: "", 每堂: "", 金額: "" }]), "流水帳-全部");
+      const ledgerRows = purchaseLog.map((r) => ({ 日期: r.date, 教練: r.coachName, 增加時數: r.qty, 每小時: r.rate, 金額: r.amount }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ledgerRows.length ? ledgerRows : [{ 日期: "", 教練: "", 增加時數: "", 每小時: "", 金額: "" }]), "流水帳-全部");
 
       // 3) 每個教練獨立流水帳
       coaches.forEach((c) => {
-        const rows = purchaseLog.filter((r) => r.coachId === c.id).map((r) => ({ 日期: r.date, 增加堂數: r.qty, 每堂: r.rate, 金額: r.amount }));
+        const rows = purchaseLog.filter((r) => r.coachId === c.id).map((r) => ({ 日期: r.date, 增加時數: r.qty, 每小時: r.rate, 金額: r.amount }));
         const total = rows.reduce((a, r) => a + r.金額, 0);
-        const body = rows.length ? [...rows, { 日期: "小計", 增加堂數: "", 每堂: "", 金額: total }] : [{ 日期: "（無記錄）", 增加堂數: "", 每堂: "", 金額: "" }];
+        const body = rows.length ? [...rows, { 日期: "小計", 增加時數: "", 每小時: "", 金額: total }] : [{ 日期: "（無記錄）", 增加時數: "", 每小時: "", 金額: "" }];
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(body), sheetName("流水-" + c.name));
       });
 
@@ -1236,7 +1237,7 @@ export default function App() {
 
   // 後備：複製流水帳做 CSV，貼入 Excel / Google Sheets
   const copyLedgerCsv = async () => {
-    const header = ["日期", "教練", "增加堂數", "每堂", "金額"];
+    const header = ["日期", "教練", "增加時數", "每小時", "金額"];
     const lines = [header.join(",")];
     purchaseLog.forEach((r) => lines.push([r.date, r.coachName, r.qty, r.rate, r.amount].join(",")));
     const csv = lines.join("\n");
@@ -1366,7 +1367,7 @@ export default function App() {
     const monthCharter = charterLog.filter((r) => monthKey(r.bookDate) === viewMonth).reduce((a, r) => a + r.amount, 0);
     const monthRevenue = monthPurchase + monthCharter;
 
-    // 指定月份已上堂數／已售堂數（同「本月總收入」用返同一個時間範圍，等成行 KPI 對得上數）
+    // 指定月份已用時數／已購時數（同「本月總收入」用返同一個時間範圍，等成行 KPI 對得上數）
     const monthUsed = allBookings.filter((b) => b.type !== "charter" && monthKey(b.date) === viewMonth).reduce((s, b) => s + b.hours, 0);
     const monthSold = purchaseLog.filter((r) => monthKey(r.date) === viewMonth).reduce((s, r) => s + r.qty, 0);
 
@@ -1399,10 +1400,10 @@ export default function App() {
             </div>
             <div style={S.kpiRow}>
               <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月總收入" : `${viewMonth} 收入`}</div><div style={S.kpiBig}>${monthRevenue.toLocaleString()}</div></div>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已上堂數" : "已上堂數"}</div><div style={S.kpiBig}>{monthUsed}</div></div>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已售堂數" : "已售堂數"}</div><div style={S.kpiBig}>{monthSold}</div></div>
+              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已用時數" : "已用時數"}</div><div style={S.kpiBig}>{monthUsed}</div></div>
+              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已購時數" : "已購時數"}</div><div style={S.kpiBig}>{monthSold}</div></div>
             </div>
-            <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}　｜　累計已上堂數 {totalUsed}　｜　累計已售堂數 {totalSold}</p>
+            <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}　｜　累計已用時數 {totalUsed}　｜　累計已購時數 {totalSold}</p>
 
             <div style={{ ...S.flexBetween, marginBottom: 0 }}>
               <h2 style={S.sectionTitle}>每月收入</h2>
@@ -1413,7 +1414,7 @@ export default function App() {
             <div style={S.bookingList}>
               {allMonths.length === 0 ? <p style={S.emptyText}>暫無收入</p> : (monthsExpanded ? allMonths : allMonths.slice(0, 6)).map((m) => (
                 <div key={m} style={S.monthCard}>
-                  <div style={S.monthHead}>{m === "初始" ? "初始已售堂數" : m}</div>
+                  <div style={S.monthHead}>{m === "初始" ? "初始已售時數" : m}</div>
                   <div style={S.monthRow}><span style={S.monthLabel}>一筆過租金（買堂）</span><span style={S.revenueNum}>${(purchaseByMonth[m] || 0).toLocaleString()}</span></div>
                   <div style={S.monthRow}><span style={S.monthLabel}>實際堂數收入</span><span style={S.classNum}>${(classByMonth[m] || 0).toLocaleString()}</span></div>
                 </div>
@@ -1425,7 +1426,7 @@ export default function App() {
             <div style={{ ...S.flexBetween, marginTop: 24 }}>
               <h2 style={{ ...S.sectionTitle, marginBottom: 0 }}>各教練統計</h2>
               <select style={S.select} value={coachSort} onChange={(e) => setCoachSort(e.target.value)}>
-                <option value="remain">剩餘堂數（少→多）</option>
+                <option value="remain">剩餘時數（少→多）</option>
                 <option value="paid">總付款（多→少）</option>
                 <option value="name">名稱</option>
               </select>
@@ -1442,14 +1443,14 @@ export default function App() {
               <>
                 {lowList.length > 0 && (
                   <div style={S.lowWarnBox}>
-                    ⚠️ 堂數快用完（剩 ≤ {LOW_CREDIT_THRESHOLD}）：{lowList.map((c) => `${c.name}（剩${c.credits - c.used}）`).join("、")}　— 可提早提醒增購
+                    ⚠️ 時數快用完（剩 ≤ {LOW_CREDIT_THRESHOLD}）：{lowList.map((c) => `${c.name}（剩${c.credits - c.used}）`).join("、")}　— 可提早提醒增購
                   </div>
                 )}
                 {expiringCoaches.length > 0 && (
                   <div style={{ ...S.lowWarnBox, background: "#332a0f", color: "#FFB347" }}>
-                    ⏰ 堂數即將／已經過期：{expiringCoaches.map((c) => {
+                    ⏰ 時數即將／已經過期：{expiringCoaches.map((c) => {
                       const batches = expiringBatchesOf(c.id);
-                      return `${c.name}（${batches.map((b) => `${b.remaining}堂@${b.expiryDate}`).join("、")}）`;
+                      return `${c.name}（${batches.map((b) => `${b.remaining}小時@${b.expiryDate}`).join("、")}）`;
                     }).join("　")}
                   </div>
                 )}
@@ -1626,7 +1627,7 @@ export default function App() {
                   <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
                   <div style={{ flex: 1 }}>
                     <div style={S.bookingCoach}>{c.name} <span style={S.idTag}>@{c.username}</span></div>
-                    <div style={S.bookingTime}>堂數 {c.used}/{c.credits}　每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
+                    <div style={S.bookingTime}>Pass時數 {c.used}/{c.credits} 小時　代book每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
                     {(() => {
                       const os = c.onboardingStatus || {};
                       const done = ["payment", "welcome", "rental", "terms"].filter((k) => os[k]).length;
@@ -1677,7 +1678,7 @@ export default function App() {
           const filteredTotal = filtered.reduce((s, r) => s + r.amount, 0);
           return (
           <div style={S.container}>
-            <h2 style={S.sectionTitle}>購買堂數流水帳</h2>
+            <h2 style={S.sectionTitle}>購買時數流水帳</h2>
             <div style={S.filterRow}>
               <span style={S.filterLabel}>教練：</span>
               <select style={S.select} value={ledgerFilter} onChange={(e) => setLedgerFilter(e.target.value)}>
@@ -1788,7 +1789,7 @@ export default function App() {
                           <div style={S.recDetail}>
                             <div>類型：{type === "charter" ? rentalFull(charterType) : type === "duo" ? "一對二" : "一對一"}</div>
                             <div>收費：{type === "charter" && charterType === "trial" ? "免費" : `$${price}`}</div>
-                            {type !== "charter" && <div>扣堂數：{hours} 堂</div>}
+                            {type !== "charter" && <div>扣時數：{hours} 小時</div>}
                             {students && students.length > 0 && <div>學生：{students.join("、")}</div>}
                             <div>落單時間：{b.createdAt || "—（舊記錄）"}</div>
                           </div>
@@ -2061,7 +2062,7 @@ export default function App() {
 
         {addCreditModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
-            <h3 style={S.modalTitle}>增加堂數</h3>
+            <h3 style={S.modalTitle}>增加時數</h3>
             <p style={S.modalText}>{getCoach(addCreditModal.coachId)?.name}</p>
             <label style={S.label}>Pass 類型</label>
             <div style={{ ...S.segRow, flexWrap: "wrap" }}>
@@ -2090,7 +2091,7 @@ export default function App() {
             )}
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setAddCreditModal(null)}>取消</button>
-              <button style={S.modalConfirm} onClick={() => { const qty = Number(addCreditModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效堂數", "error"); return; } addCredits(addCreditModal.coachId, qty, addCreditModal.date, addCreditModal.expiryDate, addCreditModal.passType || null); setAddCreditModal(null); }}>確認增加</button>
+              <button style={S.modalConfirm} onClick={() => { const qty = Number(addCreditModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效時數", "error"); return; } addCredits(addCreditModal.coachId, qty, addCreditModal.date, addCreditModal.expiryDate, addCreditModal.passType || null); setAddCreditModal(null); }}>確認增加</button>
             </div>
           </div></div>
         )}
@@ -2199,6 +2200,7 @@ export default function App() {
           const roster = selCoach ? getStudentRoster(selCoach.id) : [];
           const isDuo = adminCoachBookModal.sessionType === "duo";
           const price = selCoach ? (isDuo ? duoPrice(adminCoachBookModal.hours) : selCoach.rate * adminCoachBookModal.hours) : 0;
+          const creditCostPreview = isDuo ? adminCoachBookModal.hours + 0.5 : adminCoachBookModal.hours;
           const remain = selCoach ? selCoach.credits - selCoach.used : 0;
           return (
             <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
@@ -2208,7 +2210,7 @@ export default function App() {
               <label style={S.label}>教練</label>
               <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={adminCoachBookModal.coachId || ""}
                 onChange={(e) => setAdminCoachBookModal({ ...adminCoachBookModal, coachId: parseInt(e.target.value), students: [] })}>
-                {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}（剩 {c.credits - c.used} 堂）</option>)}
+                {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}（剩 {c.credits - c.used} 小時）</option>)}
               </select>
 
               <label style={{ ...S.label, marginTop: 14 }}>類型</label>
@@ -2241,7 +2243,7 @@ export default function App() {
 
               <div style={S.priceBox}>
                 <div style={S.priceRow}><span>時段</span><span>{adminCoachBookModal.time} – {addMinutes(adminCoachBookModal.time, adminCoachBookModal.hours * 60)}</span></div>
-                <div style={S.priceRow}><span>扣堂數</span><span>{adminCoachBookModal.hours} 堂（{selCoach?.name} 剩 {remain} 堂）</span></div>
+                <div style={S.priceRow}><span>扣時數</span><span>{creditCostPreview} 小時{isDuo ? "（1對2額外+0.5）" : ""}（{selCoach?.name} 剩 {remain} 小時）</span></div>
                 <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>收費</span><span>${price}</span></div>
               </div>
               <div style={S.modalBtns}>
@@ -2286,7 +2288,7 @@ export default function App() {
           return (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>確認取消</h3>
-            <p style={S.modalText}>{adminCancelModal.date}　{adminCancelModal.start}<br />確定幫呢個時段取消？{adminCancelModal.type !== "charter" ? "（會退回對應堂數）" : ""}</p>
+            <p style={S.modalText}>{adminCancelModal.date}　{adminCancelModal.start}<br />確定幫呢個時段取消？{adminCancelModal.type !== "charter" ? "（會退回對應時數）" : ""}</p>
             {within24 && (
               <div style={{ ...S.quotaBox, borderColor: over ? "#5a2020" : "#1d3a2a", background: over ? "#2a1414" : "#13261c" }}>
                 <div style={{ fontSize: 13, color: over ? "#FF8FA3" : "#6BCB77", fontWeight: 700 }}>
@@ -2309,7 +2311,7 @@ export default function App() {
         {delLedgerModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>剷除流水記錄</h3>
-            <p style={S.modalText}>{delLedgerModal.coachName}　+{delLedgerModal.qty} 堂　${delLedgerModal.amount.toLocaleString()}<br />（{delLedgerModal.date}）<br /><br />確定剷除？教練堂數會相應扣減，此動作無法復原。</p>
+            <p style={S.modalText}>{delLedgerModal.coachName}　+{delLedgerModal.qty} 小時　${delLedgerModal.amount.toLocaleString()}<br />（{delLedgerModal.date}）<br /><br />確定剷除？教練時數會相應扣減，此動作無法復原。</p>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setDelLedgerModal(null)}>返回</button>
               <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
@@ -2388,7 +2390,7 @@ export default function App() {
           </div>
         );
       })()}
-      {soldOut && <div style={S.soldOutBanner}>⚠️ 你已用晒購買堂數，請聯絡管理員增購後再預約</div>}
+      {soldOut && <div style={S.soldOutBanner}>⚠️ 你已用晒購買時數，請聯絡管理員增購後再預約</div>}
       {isCoach && (() => {
         const exp = expiringBatchesOf(currentUser.id);
         if (exp.length === 0) return null;
@@ -3135,7 +3137,7 @@ export default function App() {
               <button style={!allowDuo ? S.segDisabled : isDuo ? S.segActive : S.seg} disabled={!allowDuo} onClick={() => allowDuo && setBookModal({ ...bookModal, sessionType: "duo" })}>1對2</button>
               {allowFilming && <button style={isFilming ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, sessionType: "filming" })}>🎬 拍片</button>}
             </div>
-            {isFilming && <p style={S.assistHint}>拍片佔全場、$0、唔扣堂數。其他冇拍片權限嘅教練見唔到呢格（當空格）；如果有人 book 中，呢個拍片安排會自動取消，你會收到通知。</p>}
+            {isFilming && <p style={S.assistHint}>拍片佔全場、$0、唔扣時數。其他冇拍片權限嘅教練見唔到呢格（當空格）；如果有人 book 中，呢個拍片安排會自動取消，你會收到通知。</p>}
             <label style={{ ...S.label, marginTop: 14 }}>時長</label>
             <div style={S.segRow}>
               <button style={bookModal.hours === 1 ? S.segActive : S.seg} onClick={() => setBookModal({ ...bookModal, hours: 1 })}>1 小時</button>
@@ -3177,7 +3179,7 @@ export default function App() {
             <div style={S.priceBox}>
               <div style={S.priceRow}><span>時段</span><span>{bookModal.time} – {addMinutes(bookModal.time, bookModal.hours * 60)}</span></div>
               {isFilming ? (
-                <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>拍片</span><span>$0（唔扣堂數）</span></div>
+                <div style={{ ...S.priceRow, color: "#4ECDC4", fontWeight: 700, fontSize: 16 }}><span>拍片</span><span>$0（唔扣時數）</span></div>
               ) : (
                 <>
                   <div style={S.priceRow}><span>扣 Pass 時數</span><span>{passCost} 小時{isDuo ? "（1對2額外+0.5）" : ""}{(bookModal.repeatWeeks || 1) > 1 ? `（每週，最多扣 ${(passCost * bookModal.repeatWeeks).toFixed(1)} 小時）` : ""}</span></div>
@@ -3197,7 +3199,7 @@ export default function App() {
       {cancelModal && (
         <div style={S.modalOverlay}><div style={S.modal}>
           <h3 style={S.modalTitle}>確認取消</h3>
-          <p style={S.modalText}>{cancelModal.date}　{cancelModal.start}<br />取消後退回對應堂數</p>
+          <p style={S.modalText}>{cancelModal.date}　{cancelModal.start}<br />取消後退回對應時數</p>
           <div style={S.modalBtns}>
             <button style={S.modalCancel} onClick={() => setCancelModal(null)}>返回</button>
             <button style={S.modalConfirm} onClick={() => doCancel(cancelModal.date, cancelModal.start, cancelModal.coachId, cancelModal.type)}>確認取消</button>

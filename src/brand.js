@@ -21,7 +21,7 @@ export const DUO_BASE = 150; // 一對二底價（1小時）
 export const DUO_HALF_HOUR_ADD = 50; // 一對二每加0.5小時加幾多
 export const CHARTER_PRICE = 300; // 包場/小組 每節價錢（admin 落單時仍可自由改）
 export const ASSIST_CANCEL_LIMIT = 1; // 每位教練每月「24小時內代取消」額度
-export const LOW_CREDIT_THRESHOLD = 2; // 剩餘堂數 ≤ 此數 視為快用完
+export const LOW_CREDIT_THRESHOLD = 2; // 剩餘時數 ≤ 此數 視為快用完
 // ---- Training Pass 制度（第9項）：教練買咗Pass之後，一律用 PASS_HOURLY_RATE 計費，唔理solo/duo/包場 ----
 export const PASS_HOURLY_RATE = 100; // Pass 制下，每小時收費
 export const PERSONAL_PASS_HOURS = 10; // 個人訓練通行證：時數
@@ -120,7 +120,7 @@ ${bankBlock}
 
 －－－－－－－－－－
 
-收到付款確認後，我們會為你登記使用堂數及有效期限，之後可按需要預約場地使用時間。`;
+收到付款確認後，我們會為你登記使用時數及有效期限，之後可按需要預約場地使用時間。`;
 }
 
 export function onboardingWelcomeText(coachName) {
@@ -162,21 +162,12 @@ Training Pass：
 }
 
 // 第6項：Admin發現教練已上堂但未book返，發送嘅補book提醒（WhatsApp deep-link / 系統內部通知共用同一段文字）
-export function retroactiveBookingReminderText(coachName, date, startTime) {
+export function retroactiveBookingReminderText(coachName, date, startTime, endTime) {
   return `${coachName}，你好！🙏
 
-我哋留意到你喺 [${date} ${startTime}] 可能已經用咗場地上堂，但未喺系統入面 book 返。
+我哋留意到你喺 [${date} ${startTime}–${endTime}] 可能已經用咗場地上堂，但未喺系統入面 book 返。
 
-麻煩補返個記錄，方便計算堂數同流水帳，多謝晒！
+麻煩補返個記錄，方便計算時數同流水帳，多謝晒！
 
-📱 開App後，首頁會直接見到呢個時段，撳一下就可以補book，補book嗰陣可以自己填返實際用咗幾耐。`;
-}
-
-// 第11項：Admin懷疑某條取消記錄有問題（可能錯手取消），send WhatsApp畀做呢個動作嘅教練／管理員核實
-export function suspiciousCancelText(date, start, end, description) {
-  return `你好！🙏
-
-我哋想核實一下 [${date} ${start}–${end}]（${description}）呢個時段嘅取消記錄，想問吓係咪你操作嘅？
-
-如果係錯手取消，麻煩通知我哋一聲，睇吓可唔可以補返，多謝晒！`;
+📱 開App後，首頁會直接見到呢個時段，撳一下就可以補book。`;
 }
