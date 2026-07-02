@@ -60,8 +60,23 @@ export function actorLabel(v) {
 export const isClosedDay = (date) => CLOSED_DAYS.includes(new Date(`${date}T00:00:00`).getDay());
 // 教練顏色自動派：根據 coachId 用黃金角 hash 一個 HSL 色相，固定飽和度/明度，可以無限擴展、相鄰ID易分辨、零人手介入
 export function coachColorFromId(id) {
+  // 黃金角公式生成 hue，再轉做 hex（唔用 hsl() 字串），因為成個 app 好多地方用緊
+  // `c.color + "33"` 呢種「hex尾加透明度」寫法整半透明底色，呢招只啱 hex 格式，
+  // hsl(...)+"33" 係無效CSS會令背景完全冧走（變黑）。轉做hex先可以同現有寫法相容。
   const hue = (Number(id) * 137.508) % 360;
-  return `hsl(${hue.toFixed(0)}, 65%, 60%)`;
+  const s = 0.65, l = 0.60;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r1, g1, b1;
+  if (hue < 60) [r1, g1, b1] = [c, x, 0];
+  else if (hue < 120) [r1, g1, b1] = [x, c, 0];
+  else if (hue < 180) [r1, g1, b1] = [0, c, x];
+  else if (hue < 240) [r1, g1, b1] = [0, x, c];
+  else if (hue < 300) [r1, g1, b1] = [x, 0, c];
+  else [r1, g1, b1] = [c, 0, x];
+  const toHex = (v) => Math.round((v + m) * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r1)}${toHex(g1)}${toHex(b1)}`;
 }
 
 // 固定一週：星期日=第一日、星期六=第七日（唔再係「今日之後7日」嘅 rolling window）

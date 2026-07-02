@@ -22,8 +22,9 @@ export const S = {
   noticeBanner: { background: "#332a0f", color: "#FFB347", padding: "10px 20px", fontSize: 13, textAlign: "center", borderBottom: "1px solid #4a3a15", lineHeight: 1.5 },
   expiryBanner: { background: "#332a0f", color: "#FFB347", padding: "10px 20px", fontSize: 13, textAlign: "center", borderBottom: "1px solid #5a4a1a" },
   tabRow: { display: "flex", borderTop: "1px solid #222", background: "#151515", position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 50, paddingBottom: "env(safe-area-inset-bottom)", boxShadow: "0 -4px 16px rgba(0,0,0,0.35)" },
-  tab: { flex: 1, background: "transparent", border: "none", color: "#666", padding: "10px 4px 12px", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, position: "relative" },
-  tabActive: { flex: 1, background: "transparent", border: "none", color: "#4ECDC4", padding: "10px 4px 12px", fontSize: 11, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, position: "relative" },
+  tab: { flex: 1, background: "transparent", border: "none", color: "#666", padding: "10px 4px 12px", fontSize: 12.5, cursor: "pointer", whiteSpace: "nowrap", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, position: "relative" },
+  tabActive: { flex: 1, background: "transparent", border: "none", color: "#4ECDC4", padding: "10px 4px 12px", fontSize: 12.5, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, position: "relative" },
+  tabIcon: { fontSize: 24, lineHeight: 1 },
   badge: { background: "#4ECDC4", color: "#000", borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700, position: "absolute", top: -6, right: -10 },
   calContainer: { padding: 16 },
   // Reminder Card（首頁今日場地使用提醒卡，第0.1項）

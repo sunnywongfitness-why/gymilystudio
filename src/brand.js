@@ -162,12 +162,21 @@ Training Pass：
 }
 
 // 第6項：Admin發現教練已上堂但未book返，發送嘅補book提醒（WhatsApp deep-link / 系統內部通知共用同一段文字）
-export function retroactiveBookingReminderText(coachName, date, startTime, endTime) {
+export function retroactiveBookingReminderText(coachName, date, startTime) {
   return `${coachName}，你好！🙏
 
-我哋留意到你喺 [${date} ${startTime}–${endTime}] 可能已經用咗場地上堂，但未喺系統入面 book 返。
+我哋留意到你喺 [${date} ${startTime}] 可能已經用咗場地上堂，但未喺系統入面 book 返。
 
 麻煩補返個記錄，方便計算堂數同流水帳，多謝晒！
 
-📱 開App後，首頁會直接見到呢個時段，撳一下就可以補book。`;
+📱 開App後，首頁會直接見到呢個時段，撳一下就可以補book，補book嗰陣可以自己填返實際用咗幾耐。`;
+}
+
+// 第11項：Admin懷疑某條取消記錄有問題（可能錯手取消），send WhatsApp畀做呢個動作嘅教練／管理員核實
+export function suspiciousCancelText(date, start, end, description) {
+  return `你好！🙏
+
+我哋想核實一下 [${date} ${start}–${end}]（${description}）呢個時段嘅取消記錄，想問吓係咪你操作嘅？
+
+如果係錯手取消，麻煩通知我哋一聲，睇吓可唔可以補返，多謝晒！`;
 }
