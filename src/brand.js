@@ -17,8 +17,6 @@ export const STAMP_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJ4AAACV
 
 // ---- 業務規則／價錢（每間公司可能唔同）----
 export const MAX_CONCURRENT = 2; // 場地同時最多幾位教練
-export const DUO_BASE = 150; // 一對二底價（1小時）
-export const DUO_HALF_HOUR_ADD = 50; // 一對二每加0.5小時加幾多
 export const CHARTER_PRICE = 300; // 包場/小組 每節價錢（admin 落單時仍可自由改）
 export const ASSIST_CANCEL_LIMIT = 1; // 每位教練每月「24小時內代取消」額度
 export const LOW_CREDIT_THRESHOLD = 2; // 剩餘時數 ≤ 此數 視為快用完
@@ -177,4 +175,19 @@ export function suspiciousCancelText(personName, date, startTime, endTime) {
 我哋喺系統記錄見到 [${date} ${startTime}–${endTime}] 呢一堂被取消咗，操作記錄顯示係你本人做嘅。
 
 想同你核實一下：呢個取消係咪你操作嘅？如果唔係你本人做嘅，麻煩即刻回覆我哋，我哋會盡快查清楚，多謝！`;
+}
+
+// 飲品訂購：教練撳「已過數，發送記錄」之後，自動開WhatsApp通知Admin核實過數（wa.me deep-link / 系統記錄共用同一段文字）
+export function drinkOrderNoticeText(coachName, items, amount, date, time) {
+  const itemLines = items.map((it) => `・${it.name} x${it.qty}`).join("\n");
+  return `Admin，你好！🥤
+
+${coachName} 剛剛落咗個飲品單，話已經過數：
+
+${itemLines}
+
+金額：$${amount}
+時間：${date} ${time}
+
+麻煩幫手核實返有冇實際收到筆錢，多謝！`;
 }

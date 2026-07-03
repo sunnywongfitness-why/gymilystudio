@@ -1,6 +1,6 @@
 // 純函數 helper：日期/時間/堂數計算、登入狀態、雲端同步比對等
 import { LS_KEY, SESSION_KEY, CALSCALE_KEY, ADMIN_TAB_KEYS } from "./constants.js";
-import { DEFAULT_COACHES, DEFAULT_SUBADMINS, CLOSED_DAYS, DUO_BASE, DUO_HALF_HOUR_ADD } from "./brand.js";
+import { DEFAULT_COACHES, DEFAULT_SUBADMINS, CLOSED_DAYS } from "./brand.js";
 import { S } from "./styles.js";
 
 export const loadStore = () => {
@@ -34,7 +34,9 @@ export function resolveSession() {
     const sub = subs.find((s) => s.id === session.id);
     if (!sub) { clearSession(); return null; }
     const firstAllowed = ADMIN_TAB_KEYS.find((k) => sub.permissions?.[k]);
-    return { user: { ...sub, role: "subadmin" }, view: "admin", adminTab: firstAllowed || "settings" };
+    // 有「總覽」權限就強制去總覽（同主admin睇齊，唔記住上次留低嗰個tab）；冇嗰個權限先fallback去佢第一個有權限嘅tab
+    const adminTab = sub.permissions?.overview ? "overview" : (firstAllowed || "settings");
+    return { user: { ...sub, role: "subadmin" }, view: "admin", adminTab };
   }
   if (session.role === "coach") {
     const coaches = persisted("coaches", DEFAULT_COACHES);
@@ -47,7 +49,6 @@ export function resolveSession() {
   return null;
 }
 export const initialSession = resolveSession();
-export function duoPrice(hours) { return DUO_BASE + Math.round((hours - 1) / 0.5) * DUO_HALF_HOUR_ADD; }
 export const isWholeVenue = (e) => e.type === "charter" && e.charterType !== "trial";
 export const rentalShort = (ct) => ct === "group" ? "小組" : ct === "trial" ? "試堂" : ct === "clean" ? "清潔" : ct === "filming" ? "拍片" : "包場";
 export const rentalFull = (ct) => ct === "group" ? "小組訓練" : ct === "trial" ? "試堂" : ct === "clean" ? "封場清潔" : ct === "filming" ? "拍片" : "私人包場";
