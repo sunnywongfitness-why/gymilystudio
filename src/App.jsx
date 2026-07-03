@@ -80,7 +80,9 @@ export default function App() {
 
   const applyBundle = (d) => {
     if (!d) return;
-    if (d.coaches !== undefined) setCoaches(d.coaches);
+    // 自動修復：舊資料入面如果有教練嘅 color 仲係舊嘅 hsl() 格式（同 "33" 透明度寫法唔兼容，令格仔背景變黑），
+    // load 嗰刻就順手轉做 hex，唔使admin逐個手動重新編輯教練先郁到個color
+    if (d.coaches !== undefined) setCoaches(d.coaches.map((c) => c.color && c.color.startsWith("hsl(") ? { ...c, color: coachColorFromId(c.id) } : c));
     if (d.adminPassword !== undefined) setAdminPassword(d.adminPassword);
     if (d.whatsappNumber !== undefined) setWhatsappNumber(d.whatsappNumber);
     if (d.venueNotice !== undefined) setVenueNotice(d.venueNotice);
@@ -164,6 +166,8 @@ export default function App() {
   const [addCreditModal, setAddCreditModal] = useState(null);
   const [sharedPassModal, setSharedPassModal] = useState(null); // {coachIdA, coachIdB, date}（第9項：共享訓練通行證）
   const [sharedTopUpModal, setSharedTopUpModal] = useState(null); // {sharedId, qty}（教練/admin都可以幫共享Pass加值）
+  const [editSharedPassModal, setEditSharedPassModal] = useState(null); // {id, totalHours, expiryDate} 修改共享Pass總時數／到期日
+  const [delSharedPassModal, setDelSharedPassModal] = useState(null); // 待刪除嘅共享Pass物件
   const [adminTab, setAdminTab] = useState(() => initialSession?.adminTab || "overview");
   const [recordsView, setRecordsView] = useState("bookings"); // bookings | cancelled
   const [recCoach, setRecCoach] = useState("all");
@@ -175,6 +179,7 @@ export default function App() {
   const [expandedCoachId, setExpandedCoachId] = useState(null);
   const [coachDrillView, setCoachDrillView] = useState("purchase"); // purchase | sessions（第6項：教練每月上堂詳情）
   const [viewMonth, setViewMonth] = useState(() => monthKey(formatDate(new Date())));
+  const [overviewDate, setOverviewDate] = useState(() => formatDate(new Date())); // 總覽「場地使用」卡而家睇緊邊一日，可以往前/往後揀
   const [monthsExpanded, setMonthsExpanded] = useState(false);
   const [newStudentName, setNewStudentName] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
@@ -894,6 +899,15 @@ export default function App() {
     setSharedPasses((prev) => prev.map((sp) => sp.id === sharedId ? { ...sp, totalHours: (sp.totalHours || 0) + qty } : sp));
     showToast(`已為共享 Pass 增加 ${qty} 小時`);
   };
+  // 直接修改共享Pass嘅總時數／到期日（同「+加值」唔同：+加值淨係加，呢個可以set任何數值，包括改細）
+  const updateSharedPass = (id, totalHours, expiryDate) => {
+    setSharedPasses((prev) => prev.map((sp) => sp.id === id ? { ...sp, totalHours, expiryDate } : sp));
+    showToast("已更新共享 Pass");
+  };
+  const deleteSharedPass = (id) => {
+    setSharedPasses((prev) => prev.filter((sp) => sp.id !== id));
+    showToast("已刪除共享 Pass");
+  };
 
   // FIFO：將某教練嘅 used 時數，依購買時間順序分配到每筆購買記錄，計出每筆嘅「已用／剩餘」
   const purchaseFifoStatus = (coachId) => {
@@ -1422,18 +1436,27 @@ export default function App() {
           <div style={S.container}>
             {(() => {
               const todayStr = formatDate(new Date());
+              const isToday = overviewDate === todayStr;
               const todaysList = [];
               Object.entries(bookings).forEach(([k, arr]) => {
                 const date = k.split("_")[0];
-                if (date !== todayStr) return;
+                if (date !== overviewDate) return;
                 arr.forEach((v) => { if (k === `${date}_${v.start}`) todaysList.push(v); });
               });
               todaysList.sort((a, b) => a.start.localeCompare(b.start));
               return (
                 <>
-                  <h2 style={S.sectionTitle}>今日場地使用（{todayStr}）</h2>
+                  <div style={S.flexBetween}>
+                    <h2 style={{ ...S.sectionTitle, marginBottom: 0 }}>場地使用{isToday ? "（今日）" : ""}</h2>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button style={S.navBtn} onClick={() => setOverviewDate((d) => addDaysToDate(d, -1))}>‹</button>
+                      <input style={{ ...S.select, padding: "4px 6px" }} type="date" value={overviewDate} onChange={(e) => setOverviewDate(e.target.value)} />
+                      <button style={S.navBtn} onClick={() => setOverviewDate((d) => addDaysToDate(d, 1))}>›</button>
+                      {!isToday && <button style={S.linkBtn} onClick={() => setOverviewDate(todayStr)}>跳返今日</button>}
+                    </div>
+                  </div>
                   {todaysList.length === 0 ? (
-                    <p style={S.emptyText}>今日暫時未有任何 book 堂</p>
+                    <p style={S.emptyText}>{overviewDate} 暫時未有任何 book 堂</p>
                   ) : (
                     <div style={{ ...S.bookingList, maxHeight: 420, overflowY: "auto" }}>
                       {todaysList.map((b, i) => {
@@ -1705,9 +1728,11 @@ export default function App() {
                       const other = (sp.coachIds || []).find((id) => id !== c.id);
                       const remain = sharedRemaining(sp);
                       return (
-                        <div key={sp.id} style={{ fontSize: 12, color: remain > 0 ? "#4ECDC4" : "#555", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
+                        <div key={sp.id} style={{ fontSize: 12, color: remain > 0 ? "#4ECDC4" : "#555", marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                           <span>🔗 共享Pass（同 {getCoach(other)?.name || "?"}）剩 {remain}/{sp.totalHours} 小時</span>
                           <button style={S.linkBtn} onClick={() => setSharedTopUpModal({ sharedId: sp.id, qty: 5 })}>+加值</button>
+                          <button style={S.linkBtn} onClick={() => setEditSharedPassModal({ id: sp.id, totalHours: sp.totalHours, expiryDate: sp.expiryDate || "" })}>編輯</button>
+                          <button style={S.linkBtn} onClick={() => setDelSharedPassModal(sp)}>刪除</button>
                         </div>
                       );
                     })}
@@ -3307,6 +3332,32 @@ export default function App() {
           <div style={S.modalBtns}>
             <button style={S.modalCancel} onClick={() => setSharedTopUpModal(null)}>取消</button>
             <button style={S.modalConfirm} onClick={() => { const qty = Number(sharedTopUpModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效小時數", "error"); return; } addSharedPassHours(sharedTopUpModal.sharedId, qty); setSharedTopUpModal(null); }}>確認加值</button>
+          </div>
+        </div></div>
+      )}
+      {editSharedPassModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>修改共享 Pass</h3>
+          <Field label="總時數（小時）"><input style={S.input} type="number" step="0.5" min="0" value={editSharedPassModal.totalHours} onChange={(e) => setEditSharedPassModal({ ...editSharedPassModal, totalHours: e.target.value })} /></Field>
+          <Field label="到期日"><input style={S.input} type="date" value={editSharedPassModal.expiryDate} onChange={(e) => setEditSharedPassModal({ ...editSharedPassModal, expiryDate: e.target.value })} /></Field>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setEditSharedPassModal(null)}>取消</button>
+            <button style={S.modalConfirm} onClick={() => {
+              const totalHours = Number(editSharedPassModal.totalHours) || 0;
+              if (totalHours <= 0) { showToast("請輸入有效小時數", "error"); return; }
+              updateSharedPass(editSharedPassModal.id, totalHours, editSharedPassModal.expiryDate);
+              setEditSharedPassModal(null);
+            }}>儲存</button>
+          </div>
+        </div></div>
+      )}
+      {delSharedPassModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>刪除共享 Pass</h3>
+          <p style={S.modalText}>確定刪除呢張共享 Pass？此動作無法復原，已用嘅時數記錄唔會受影響，但呢張卡本身會消失。</p>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setDelSharedPassModal(null)}>取消</button>
+            <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => { deleteSharedPass(delSharedPassModal.id); setDelSharedPassModal(null); }}>確認刪除</button>
           </div>
         </div></div>
       )}

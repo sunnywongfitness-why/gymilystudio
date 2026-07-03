@@ -60,10 +60,20 @@ export function actorLabel(v) {
   return v;
 }
 export const isClosedDay = (date) => CLOSED_DAYS.includes(new Date(`${date}T00:00:00`).getDay());
-// 教練顏色自動派：根據 coachId 用黃金角 hash 一個 HSL 色相，固定飽和度/明度，可以無限擴展、相鄰ID易分辨、零人手介入
+// 教練顏色自動派：根據 coachId 用黃金角 hash 一個色相，固定飽和度/明度，可以無限擴展、相鄰ID易分辨、零人手介入
+// 注意：全app好多地方用緊 c.color + "33" 呢種hex尾加透明度嘅寫法（例如格仔背景），呢個function必須輸出 #rrggbb 格式，
+// 唔可以用 hsl()/rgb()，唔係會令個透明度寫法變成invalid CSS，背景就會消失變返黑色（呢個bug以前中過招，唔好再犯）。
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = (n) => Math.round(255 * f(n)).toString(16).padStart(2, "0");
+  return `#${toHex(0)}${toHex(8)}${toHex(4)}`;
+}
 export function coachColorFromId(id) {
   const hue = (Number(id) * 137.508) % 360;
-  return `hsl(${hue.toFixed(0)}, 65%, 60%)`;
+  return hslToHex(hue, 65, 60);
 }
 
 // 固定一週：星期日=第一日、星期六=第七日（唔再係「今日之後7日」嘅 rolling window）
