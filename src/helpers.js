@@ -68,6 +68,9 @@ export function bookedByLabel(v) {
   return v;
 }
 export const isClosedDay = (date) => CLOSED_DAYS.includes(new Date(`${date}T00:00:00`).getDay());
+// 動態生成休息日提示文字，根據 brand.js 嘅 CLOSED_DAYS 自動配，唔使寫死星期幾（開新公司唔使搵埋呢句改）
+const DAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"];
+export const closedDayMessage = () => CLOSED_DAYS.length === 0 ? "" : `星期${CLOSED_DAYS.map((d) => DAY_NAMES[d]).join("、")}休息，不開放預約`;
 // 教練顏色自動派：根據 coachId 用黃金角 hash 一個色相，固定飽和度/明度，可以無限擴展、相鄰ID易分辨、零人手介入
 // 注意：全app好多地方用緊 c.color + "33" 呢種hex尾加透明度嘅寫法（例如格仔背景），呢個function必須輸出 #rrggbb 格式，
 // 唔可以用 hsl()/rgb()，唔係會令個透明度寫法變成invalid CSS，背景就會消失變返黑色（呢個bug以前中過招，唔好再犯）。
