@@ -37,8 +37,8 @@ export const CLOSE_HOUR = 22; // 場地關閉時間
 // ---- 預設帳戶（首次部署用；建議部署後盡快用 app 入面「改密碼」更新）----
 export const DEFAULT_ADMIN_PASSWORD = "admin123";
 export const DEFAULT_SUBADMINS = [
-  { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
-  { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+  { id: 1, username: "subadmin1", password: "1234", name: "副管理員1", phone: "", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
+  { id: 2, username: "subadmin2", password: "1234", name: "副管理員2", phone: "", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } },
 ];
 export const DEFAULT_COACHES = [];
 
@@ -170,4 +170,13 @@ export function retroactiveBookingReminderText(coachName, date, startTime, endTi
 麻煩補返個記錄，方便計算時數同流水帳，多謝晒！
 
 📱 開App後，首頁會直接見到呢個時段，撳一下就可以補book。`;
+}
+
+// 取消記錄核實：Admin對某筆取消記錄有疑問（例如懷疑唔係本人操作），撳掣經WhatsApp向相關人士（教練／副管理員）核實
+export function suspiciousCancelText(personName, date, startTime, endTime) {
+  return `${personName}，你好！🙏
+
+我哋喺系統記錄見到 [${date} ${startTime}–${endTime}] 呢一堂被取消咗，操作記錄顯示係你本人做嘅。
+
+想同你核實一下：呢個取消係咪你操作嘅？如果唔係你本人做嘅，麻煩即刻回覆我哋，我哋會盡快查清楚，多謝！`;
 }

@@ -11,7 +11,7 @@ import {
   ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS,
   DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
   PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS, SHARED_PASS_HOURS, SHARED_PASS_MONTHS,
-  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText, retroactiveBookingReminderText,
+  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText, retroactiveBookingReminderText, suspiciousCancelText,
 } from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
@@ -29,6 +29,7 @@ export default function App() {
   const [whatsappNumber, setWhatsappNumber] = useState(() => persisted("whatsappNumber", ""));
   const [venueNotice, setVenueNotice] = useState(() => persisted("venueNotice", ""));
   const [paymentQR, setPaymentQR] = useState(() => persisted("paymentQR", "")); // 收款 QR code（base64 圖），admin可隨時上傳/更新
+  const [adminPhone, setAdminPhone] = useState(() => persisted("adminPhone", "")); // 管理員電話，用嚟WhatsApp核實可疑取消記錄
   const [suggestionBox, setSuggestionBox] = useState(() => persisted("suggestionBox", []));
   const [adminCalendarToken, setAdminCalendarToken] = useState(() => persisted("adminCalendarToken", ""));
   const [signatureStore, setSignatureStore] = useState(() => persisted("signatureStore", {})); // 簽名圖獨立存一份，唔跟住 booking 喺每個15分鐘格重複
@@ -84,6 +85,7 @@ export default function App() {
     if (d.whatsappNumber !== undefined) setWhatsappNumber(d.whatsappNumber);
     if (d.venueNotice !== undefined) setVenueNotice(d.venueNotice);
     if (d.paymentQR !== undefined) setPaymentQR(d.paymentQR);
+    if (d.adminPhone !== undefined) setAdminPhone(d.adminPhone);
     if (d.suggestionBox !== undefined) setSuggestionBox(d.suggestionBox);
     if (d.adminCalendarToken !== undefined) setAdminCalendarToken(d.adminCalendarToken);
     if (d.signatureStore !== undefined) setSignatureStore(d.signatureStore);
@@ -114,7 +116,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -133,7 +135,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -149,7 +151,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -380,6 +382,30 @@ export default function App() {
 
   // 第6項：Admin發起「補book提醒」——揀返教練漏book嘅日期時間，寫入 retroBookingNotices（教練首頁banner會顯示），
   // 有電話就直接開WhatsApp，冇電話就fallback去copyInfoModal俾admin自己copy
+  // 取消記錄核實：根據 cancelledBy 揾返實際負責人嘅電話（教練自己攞返佢自己電話；admin 用管理員電話；subadmin 用副管理員電話）
+  const cancelVerifyContact = (r) => {
+    const by = r.cancelledBy || "";
+    if (by === "coach") { const c = getCoach(r.coachId); return c ? { name: c.name, phone: c.phone || "" } : null; }
+    if (by === "admin") return { name: "管理員", phone: adminPhone || "" };
+    if (by.startsWith("subadmin:")) {
+      const subName = by.slice("subadmin:".length);
+      const sub = subAdmins.find((s) => s.name === subName);
+      return { name: subName, phone: sub?.phone || "" };
+    }
+    return null;
+  };
+  const verifyCancel = (r) => {
+    const contact = cancelVerifyContact(r);
+    if (!contact) { showToast("搵唔到負責人資料", "error"); return; }
+    const end = addMinutes(r.start, r.hours * 60);
+    const text = suspiciousCancelText(contact.name, r.date, r.start, end);
+    if (contact.phone) {
+      window.open(`https://wa.me/${contact.phone}?text=${encodeURIComponent(text)}`, "_blank");
+    } else {
+      setCopyInfoModal({ title: `核實取消記錄（${contact.name}）`, text });
+    }
+  };
+
   const sendRetroReminder = () => {
     const { coachId, coachName, date, start, hours } = retroReminderModal;
     if (!date || !start || !hours) { showToast("請填晒日期／時間／時長", "error"); return; }
@@ -550,8 +576,8 @@ export default function App() {
     if (creditCost > remain) { showToast(`${coach.name} 剩餘時數不足`, "error"); return; }
     const err = canPlace(date, time, hours, 1, coachId);
     if (err) { showToast(err, "error"); return; }
-    const price = sessionType === "duo" ? duoPrice(hours) : coach.rate * hours;
-    const rentalCost = coach.rate * hours;
+    const price = creditCost * PASS_HOURLY_RATE; // 收費制度方法二：Admin代教練book統一用返Pass池$100/hr嘅計法，唔再用教練自己嗰張獨立價目表（rate/duoPrice）
+    const rentalCost = price; // 方法二：呢筆收費本身就係租場成本，同教練自己book（confirmBook）一致，唔再獨立用coach.rate計
     const studentList = (students || []).filter(Boolean).slice(0, 4);
     const coachRoster = getStudentRoster(coachId);
     const studentCharges = {};
@@ -1394,7 +1420,49 @@ export default function App() {
 
         {adminTab === "overview" && (
           <div style={S.container}>
-            <div style={{ ...S.flexBetween, marginBottom: 10 }}>
+            {(() => {
+              const todayStr = formatDate(new Date());
+              const todaysList = [];
+              Object.entries(bookings).forEach(([k, arr]) => {
+                const date = k.split("_")[0];
+                if (date !== todayStr) return;
+                arr.forEach((v) => { if (k === `${date}_${v.start}`) todaysList.push(v); });
+              });
+              todaysList.sort((a, b) => a.start.localeCompare(b.start));
+              return (
+                <>
+                  <h2 style={S.sectionTitle}>今日場地使用（{todayStr}）</h2>
+                  {todaysList.length === 0 ? (
+                    <p style={S.emptyText}>今日暫時未有任何 book 堂</p>
+                  ) : (
+                    <div style={{ ...S.bookingList, maxHeight: 420, overflowY: "auto" }}>
+                      {todaysList.map((b, i) => {
+                        const coach = b.type === "charter" ? null : getCoach(b.coachId);
+                        const isFilming = b.type === "charter" && b.charterType === "filming";
+                        const isClean = b.type === "charter" && b.charterType === "clean";
+                        return (
+                          <div key={i} style={S.bookingItem}>
+                            <div style={{ ...S.dot, background: b.type === "charter" ? "#fff" : coach?.color }} />
+                            <div style={{ flex: 1 }}>
+                              <div style={S.bookingCoach}>
+                                {b.type === "charter" ? rentalFull(b.charterType) : coach?.name || "（已刪除教練）"}{" "}
+                                <span style={b.type === "duo" ? S.duoTag : b.type === "charter" ? S.charterTag : S.soloTag}>
+                                  {b.type === "duo" ? "1對2" : b.type === "charter" ? (isFilming ? "拍片" : isClean ? "清潔" : `$${b.price || 0}`) : "1對1"}
+                                </span>
+                              </div>
+                              <div style={S.bookingTime}>{b.start}–{addMinutes(b.start, b.hours * 60)}（{b.hours}小時）{b.students && b.students.length > 0 ? `　${b.students.join("、")}` : ""}{b.type === "charter" && b.coachName ? `　負責：${b.coachName}` : ""}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p style={S.assistHint}>※ 純顯示今日全部時段（包括拍片／清潔），想取消或編輯請去「課表」或「記錄」。</p>
+                </>
+              );
+            })()}
+
+            <div style={{ ...S.flexBetween, marginBottom: 10, marginTop: 24 }}>
               <span style={{ fontSize: 12, color: "#888" }}>查看月份</span>
               <input style={S.select} type="month" value={viewMonth} onChange={(e) => setViewMonth(e.target.value)} />
             </div>
@@ -1466,11 +1534,11 @@ export default function App() {
                           <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
                           <div style={{ flex: 1 }}>
                             <div style={S.bookingCoach}>{c.name}{low && <span style={S.lowPill}>低</span>}</div>
-                            <div style={S.bookingTime}>每堂 ${c.rate}　已用 {c.used}/{c.credits} 堂</div>
+                            <div style={S.bookingTime}>Pass時數 {c.used}/{c.credits} 小時　自訂增值每小時 ${c.rate}</div>
                           </div>
                           <div style={{ textAlign: "right" }}>
                             <div style={S.revenueNum}>${(coachPaid[c.id] || 0).toLocaleString()}</div>
-                            <div style={S.bookingTime}>總付款　剩 <span style={{ color: low ? "#FF8FA3" : "#aaa", fontWeight: low ? 700 : 400 }}>{remain}</span> 堂</div>
+                            <div style={S.bookingTime}>總付款　剩 <span style={{ color: low ? "#FF8FA3" : "#aaa", fontWeight: low ? 700 : 400 }}>{remain}</span> 小時</div>
                           </div>
                         </div>
                         {expanded && (
@@ -1486,7 +1554,7 @@ export default function App() {
                                 return (
                                   <div key={b.id} style={S.purchaseRow}>
                                     <div>
-                                      <div style={S.bookingTime}>{b.date}　+{b.qty} 堂　$@{b.rate}</div>
+                                      <div style={S.bookingTime}>{b.date}　+{b.qty} 小時　$@{b.rate}</div>
                                       {b.expiryDate && <div style={{ fontSize: 11, color: isExpired ? "#FF6B6B" : isExpiring ? "#FFB347" : "#666" }}>失效日：{b.expiryDate}{isExpired ? "（已過期）" : isExpiring ? "（快到期）" : ""}</div>}
                                     </div>
                                     <div style={{ textAlign: "right", fontSize: 12 }}>
@@ -1622,19 +1690,29 @@ export default function App() {
               <button style={S.linkBtn} onClick={() => setShowPasswords((v) => !v)}>{showPasswords ? "🙈 隱藏密碼" : "👁️ 顯示密碼"}</button>
             </div>
             <div style={S.bookingList}>
-              {coaches.map((c) => (
+              {coaches.map((c, idx) => (
                 <div key={c.id} style={S.coachStatRow}>
                   <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
                   <div style={{ flex: 1 }}>
-                    <div style={S.bookingCoach}>{c.name} <span style={S.idTag}>@{c.username}</span></div>
+                    <div style={S.bookingCoach}>{idx + 1}. {c.name} <span style={S.idTag}>@{c.username}</span></div>
                     <div style={S.bookingTime}>Pass時數 {c.used}/{c.credits} 小時　代book每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
                     {(() => {
                       const os = c.onboardingStatus || {};
                       const done = ["payment", "welcome", "rental", "terms"].filter((k) => os[k]).length;
                       return done > 0 && done < 4 ? <div style={{ fontSize: 11, color: "#FFB347" }}>Onboarding {done}/4</div> : done === 4 ? <div style={{ fontSize: 11, color: "#6BCB77" }}>Onboarding 完成 ✓</div> : null;
                     })()}
+                    {sharedPassesOf(c.id).map((sp) => {
+                      const other = (sp.coachIds || []).find((id) => id !== c.id);
+                      const remain = sharedRemaining(sp);
+                      return (
+                        <div key={sp.id} style={{ fontSize: 12, color: remain > 0 ? "#4ECDC4" : "#555", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
+                          <span>🔗 共享Pass（同 {getCoach(other)?.name || "?"}）剩 {remain}/{sp.totalHours} 小時</span>
+                          <button style={S.linkBtn} onClick={() => setSharedTopUpModal({ sharedId: sp.id, qty: 5 })}>+加值</button>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 堂</button>
+                  <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 時數</button>
                   <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00", hours: 1 })}>⚠️ 提醒補book</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
@@ -1647,28 +1725,7 @@ export default function App() {
               <button style={S.addBtn} disabled={coaches.length < 2} onClick={() => setSharedPassModal({ coachIdA: coaches[0]?.id, coachIdB: coaches[1]?.id, date: formatDate(new Date()) })}>+ 開共享 Pass</button>
             </div>
             {coaches.length < 2 && <p style={S.assistHint}>要至少2位教練先可以開共享 Pass。</p>}
-            {sharedPasses.length === 0 ? <p style={S.emptyText}>暫無共享 Pass</p> : (
-              <div style={S.bookingList}>
-                {sharedPasses.map((sp) => {
-                  const names = (sp.coachIds || []).map((id) => getCoach(id)?.name || "（已刪除教練）");
-                  const remain = sharedRemaining(sp);
-                  return (
-                    <div key={sp.id} style={S.purchaseRow}>
-                      <div>
-                        <div style={S.bookingCoach}>{names.join(" ＋ ")}</div>
-                        <div style={S.bookingTime}>{sp.purchaseDate}　失效日：{sp.expiryDate || "無限期"}</div>
-                        <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{(sp.coachIds || []).map((id) => `${getCoach(id)?.name || id}用咗${(sp.usageByCoach || {})[id] || 0}hr`).join("　")}</div>
-                      </div>
-                      <div style={{ textAlign: "right", fontSize: 12 }}>
-                        <div style={{ color: "#6BCB77" }}>已用 {sp.usedHours || 0}</div>
-                        <div style={{ color: remain > 0 ? "#4ECDC4" : "#555" }}>剩 {remain} / {sp.totalHours}</div>
-                        <button style={S.linkBtn} onClick={() => setSharedTopUpModal({ sharedId: sp.id, qty: 5 })}>+ 加值</button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <p style={S.assistHint}>※ 已開嘅共享 Pass，會直接顯示喺對應兩位教練嘅卡上面（見上方教練帳戶列表）。</p>
           </div>
         )}
 
@@ -1697,8 +1754,8 @@ export default function App() {
                   <div key={r.id} style={S.bookingItem}>
                     <div style={{ ...S.dot, background: getCoach(r.coachId)?.color || "#666" }} />
                     <div style={{ flex: 1 }}>
-                      <div style={S.bookingCoach}>{r.coachName} <span style={S.plusTag}>+{r.qty} 堂</span></div>
-                      <div style={S.bookingTime}>{r.date}　@${r.rate}/堂{r.addedBy ? `　由${r.addedBy === "admin" ? "管理員" : r.addedBy.startsWith("subadmin:") ? `副管理員（${r.addedBy.slice(9)}）` : r.addedBy}新增` : ""}</div>
+                      <div style={S.bookingCoach}>{r.coachName} <span style={S.plusTag}>+{r.qty} 小時</span></div>
+                      <div style={S.bookingTime}>{r.date}　@${r.rate}/小時{r.addedBy ? `　由${r.addedBy === "admin" ? "管理員" : r.addedBy.startsWith("subadmin:") ? `副管理員（${r.addedBy.slice(9)}）` : r.addedBy}新增` : ""}</div>
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={S.revenueNum}>+${r.amount.toLocaleString()}</div>
@@ -1795,12 +1852,12 @@ export default function App() {
                           </div>
                         )}
                       </div>
-                      {!isPast && <button style={S.delBtn} onClick={() => setAdminCancelModal({ date, start, coachId, type })}>取消</button>}
+                      <button style={S.delBtn} onClick={() => setAdminCancelModal({ date, start, coachId, type })}>取消</button>
                     </div>
                     );
                   })}
                 </div>
-                <p style={S.assistHint}>※ 撳記錄可展開詳情；管理員可協助取消未開始嘅時段（包括24小時內）。</p>
+                <p style={S.assistHint}>※ 撳記錄可展開詳情；管理員可協助取消任何時段（包括未開始、24小時內、甚至已完成嘅堂）。</p>
               </>
               );
             })() : (
@@ -1817,6 +1874,7 @@ export default function App() {
                         <div style={S.bookingTime}>原定 {r.date} · {r.start}–{addMinutes(r.start, r.hours * 60)}（{r.hours}小時）{r.price ? `　$${r.price}` : ""}</div>
                         <div style={S.bookingTime}>取消於 {r.cancelledAt}</div>
                       </div>
+                      <button style={S.smallBtn} onClick={() => verifyCancel(r)}>📲 核實</button>
                     </div>
                   ))}
                 </div>
@@ -1830,7 +1888,7 @@ export default function App() {
           <div style={S.container}>
             {currentUser.role === "admin" && (
               <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 2px 10px", marginBottom: 6, position: "sticky", top: 0, background: "#0f0f0f", zIndex: 30 }}>
-                {[["set-password", "密碼"], ["set-notice", "場地公告"], ["set-qr-account", "收款QR"], ["set-drinks", "飲品"], ["set-calendar", "日曆同步"], ["set-whatsapp", "WhatsApp"], ["set-suggestions", "意見箱"], ["set-export", "備份"], ["set-subadmins", "副管理員"], ["set-reset", "重設資料"]].map(([id, label]) => (
+                {[["set-password", "密碼"], ["set-admin-phone", "管理員電話"], ["set-notice", "場地公告"], ["set-qr-account", "收款QR"], ["set-drinks", "飲品"], ["set-calendar", "日曆同步"], ["set-whatsapp", "WhatsApp"], ["set-suggestions", "意見箱"], ["set-export", "備份"], ["set-subadmins", "副管理員"], ["set-reset", "重設資料"]].map(([id, label]) => (
                   <button key={id} style={{ ...S.smallBtn, whiteSpace: "nowrap", flexShrink: 0 }}
                     onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>
                 ))}
@@ -1843,10 +1901,16 @@ export default function App() {
               <Field label="確認新密碼"><input style={S.input} type="password" value={pwForm.new2} onChange={(e) => setPwForm({ ...pwForm, new2: e.target.value })} /></Field>
               <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
             </div>
-            <p style={S.assistHint}>※ 教練自己 book 堂：Training Pass 制，$100/小時（1對2 額外多扣0.5小時）。Admin 代教練 book 堂：維持單次收費（1對1 用教練每堂租金；1對2 $150/小時，每加0.5小時 +$50）。</p>
+            <p style={S.assistHint}>※ 教練自己 book 堂、同 Admin 代教練 book 堂，而家統一用 Training Pass 制計費同扣減：$100/小時（1對2 額外多扣0.5小時），兩條path扣緊同一個時數池。</p>
 
             {currentUser.role === "admin" && (
               <>
+                <h2 id="set-admin-phone" style={{ ...S.sectionTitle, marginTop: 28 }}>管理員電話</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>用嚟WhatsApp核實可疑取消記錄（例如懷疑唔係本人操作）。教練睇唔到呢個號碼。</p>
+                  <Field label="電話號碼"><input style={S.input} placeholder="例如 85291234567" value={adminPhone} onChange={(e) => setAdminPhone(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
+                </div>
+
                 <h2 id="set-notice" style={{ ...S.sectionTitle, marginTop: 28 }}>場地公告</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
@@ -1924,22 +1988,6 @@ export default function App() {
                   <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
                 </div>
 
-                <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code（轉數快／PayMe）</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>上傳一張收款 QR Code 圖，將來會顯示喺 Onboarding 付款資訊、教練買 Pass 畫面等地方，方便教練直接掃碼轉數。可隨時重新上傳更換。</p>
-                  {paymentQR && <img src={paymentQR} alt="收款 QR Code" style={{ width: 160, height: 160, objectFit: "contain", background: "#fff", borderRadius: 10, marginBottom: 10 }} />}
-                  <input type="file" accept="image/*" onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    reader.onload = () => { setPaymentQR(reader.result); showToast("已上傳收款 QR Code"); };
-                    reader.onerror = () => showToast("上傳失敗，請再試一次", "error");
-                    reader.readAsDataURL(file);
-                    e.target.value = "";
-                  }} />
-                  {paymentQR && <button style={{ ...S.smallBtn, marginTop: 10 }} onClick={() => { setPaymentQR(""); showToast("已移除收款 QR Code"); }}>移除</button>}
-                </div>
-
                 <h2 id="set-suggestions" style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
                 <p style={S.assistHint}>教練透過「意見」分頁匿名提交，系統冇存任何身份資訊，連你都查唔到係邊位教練寫嘅。</p>
                 {suggestionBox.length === 0 ? <p style={S.emptyText}>暫無意見</p> : (
@@ -1982,6 +2030,7 @@ export default function App() {
                         setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, username: e.target.value } : x));
                       }} /></Field>
                       <Field label="密碼"><input style={S.input} value={s.password} onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, password: e.target.value } : x))} /></Field>
+                      <Field label="電話號碼（用嚟WhatsApp核實可疑取消記錄，唔會俾教練睇到）"><input style={S.input} value={s.phone || ""} placeholder="例如 85291234567" onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, phone: e.target.value.replace(/[^0-9]/g, "") } : x))} /></Field>
                       <label style={S.label}>可使用分頁</label>
                       <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
                         {[["overview", "總覽"], ["schedule", "課表"], ["coaches", "教練"], ["ledger", "流水帳"], ["records", "記錄"], ["settings", "設定"]].map(([k, label]) => (
@@ -1997,7 +2046,7 @@ export default function App() {
                 </div>
                 <button style={{ ...S.addBtn, marginTop: 12 }} onClick={() => {
                   const newId = Math.max(0, ...subAdmins.map((s) => s.id)) + 1;
-                  setSubAdmins((prev) => [...prev, { id: newId, username: `subadmin${newId}`, password: "1234", name: `副管理員${newId}`, permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } }]);
+                  setSubAdmins((prev) => [...prev, { id: newId, username: `subadmin${newId}`, password: "1234", name: `副管理員${newId}`, phone: "", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } }]);
                 }}>+ 新增副管理員</button>
               </>
             )}
@@ -2199,8 +2248,8 @@ export default function App() {
           const selCoach = getCoach(adminCoachBookModal.coachId);
           const roster = selCoach ? getStudentRoster(selCoach.id) : [];
           const isDuo = adminCoachBookModal.sessionType === "duo";
-          const price = selCoach ? (isDuo ? duoPrice(adminCoachBookModal.hours) : selCoach.rate * adminCoachBookModal.hours) : 0;
           const creditCostPreview = isDuo ? adminCoachBookModal.hours + 0.5 : adminCoachBookModal.hours;
+          const price = selCoach ? creditCostPreview * PASS_HOURLY_RATE : 0;
           const remain = selCoach ? selCoach.credits - selCoach.used : 0;
           return (
             <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
@@ -2377,8 +2426,8 @@ export default function App() {
       <Header title={`你好，${liveUser.name}`} onLogout={logout} syncState={syncState} />
       {venueNotice && venueNotice.trim() && <div style={S.noticeBanner}>📢 {venueNotice}</div>}
       <div style={S.creditBar}>
-        <span>已購買 {liveUser.credits} 堂</span>
-        <span style={{ color: remaining > 0 ? "#4ECDC4" : "#FF6B6B", fontWeight: 700 }}>剩餘 {remaining} 堂</span>
+        <span>已購買 {liveUser.credits} 小時</span>
+        <span style={{ color: remaining > 0 ? "#4ECDC4" : "#FF6B6B", fontWeight: 700 }}>剩餘 {remaining} 小時</span>
       </div>
       {(() => {
         const used = assistUsedThisMonth(currentUser.id);
@@ -2396,13 +2445,19 @@ export default function App() {
         if (exp.length === 0) return null;
         return (
           <div style={S.expiryBanner}>
-            ⏰ 你有 {exp.reduce((a, b) => a + b.remaining, 0)} 堂將於 {exp.map((b) => b.expiryDate).join("、")} 失效，請盡快預約使用
+            ⏰ 你有 {exp.reduce((a, b) => a + b.remaining, 0)} 小時將於 {exp.map((b) => b.expiryDate).join("、")} 失效，請盡快預約使用
           </div>
         );
       })()}
       <div style={S.tabRow}>
         <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}><span style={S.tabIcon}>📅</span><span>預約場地</span></button>
-        <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}><span style={S.tabIcon}>📋</span><span>我的預約</span>{myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}</button>
+        <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}>
+          <span style={{ position: "relative" }}>
+            <span style={S.tabIcon}>📋</span>
+            {myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}
+          </span>
+          <span>我的預約</span>
+        </button>
         <button style={view === "home" ? S.tabActive : S.tab} onClick={() => setView("home")}>
           <span style={{ position: "relative" }}>
             <span style={S.tabIcon}>🏠</span>
@@ -2692,13 +2747,12 @@ export default function App() {
               <div style={{ ...S.formCard, marginBottom: 14 }}>
                 <div style={{ ...S.assistHint, marginBottom: 6 }}>我的 Training Pass</div>
                 {pRemain2 > 0 && <div style={S.bookingTime}>個人證（solo限定）剩 {pRemain2} 小時</div>}
-                {fRemain2 > 0 && <div style={S.bookingTime}>彈性／舊制剩 {fRemain2} 小時</div>}
+                {fRemain2 > 0 && <div style={S.bookingTime}>彈性證剩 {fRemain2} 小時</div>}
                 {myShared.map((sp) => {
                   const other = (sp.coachIds || []).find((id) => id !== currentUser.id);
                   return (
                     <div key={sp.id} style={{ ...S.flexBetween, marginTop: 4 }}>
                       <span style={S.bookingTime}>共享 Pass（同 {getCoach(other)?.name || "?"}）剩 {sharedRemaining(sp)} / {sp.totalHours} 小時</span>
-                      <button style={S.linkBtn} onClick={() => setSharedTopUpModal({ sharedId: sp.id, qty: 5 })}>+ 加值</button>
                     </div>
                   );
                 })}
@@ -3124,7 +3178,7 @@ export default function App() {
         const fRemain = flexibleRemaining(currentUser.id);
         const poolLabel = !isFilming ? (
           bookModal.sessionType === "solo" && pRemain >= passCost ? "個人證" :
-          fRemain >= passCost ? "彈性／舊制" :
+          fRemain >= passCost ? "彈性證" :
           sharedPassesOf(currentUser.id).some((sp) => sharedRemaining(sp) >= passCost) ? "共享 Pass" : "時數不足"
         ) : "";
         return (
