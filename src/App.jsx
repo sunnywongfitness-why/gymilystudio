@@ -180,6 +180,7 @@ export default function App() {
   const [overviewDate, setOverviewDate] = useState(() => formatDate(new Date())); // 總覽「場地使用」卡而家睇緊邊一日，可以往前/往後揀
   const [monthsExpanded, setMonthsExpanded] = useState(false);
   const [incomeDetailMonth, setIncomeDetailMonth] = useState(null); // 每月收入卡「睇明細」展開緊邊個月份+邊個類別，例如 "2026-07:purchase"
+  const [kpiDetailModal, setKpiDetailModal] = useState(null); // 總覽6張KPI卡撳落去彈嘅明細modal，值："revenue"|"actual"|"charter"|"expected"|"used"|"drinks"
   const [newStudentName, setNewStudentName] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
   const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
@@ -1391,15 +1392,24 @@ export default function App() {
     const totalClassRev = Object.values(classByMonth).reduce((a, b) => a + b, 0);
     const totalRevenue = totalPurchase + totalCharter; // 實收現金：買堂 + 包場/小組
 
-    // 指定月份總收入：該月買堂 + 該月包場/小組（試堂 $0 自動唔計）
+    // 指定月份嘅6個總覽KPI（2026-07定案）：
+    // 本月總收入＝淨係Pass購買現金（唔包括包場/小組）；其他租場收費＝包場/小組金額（獨立一張卡）；
+    // 實際收入＝已用時數(至今,非包場)金額＋包場/小組收入；本月已book時數＝成個月已book嘅非包場時數(唔理過咗未)；
+    // 本月已用時數(至今)＝淨係計到今日為止已經發生咗嘅非包場堂
     const thisMonth = monthKey(formatDate(new Date()));
+    const todayStr = formatDate(new Date());
     const monthPurchase = purchaseLog.filter((r) => monthKey(r.date) === viewMonth).reduce((a, r) => a + r.amount, 0);
+    const monthPurchaseRecords = purchaseLog.filter((r) => monthKey(r.date) === viewMonth);
     const monthCharter = charterLog.filter((r) => monthKey(r.bookDate) === viewMonth).reduce((a, r) => a + r.amount, 0);
-    const monthRevenue = monthPurchase + monthCharter;
-
-    // 指定月份已用時數／已購時數（同「本月總收入」用返同一個時間範圍，等成行 KPI 對得上數）
-    const monthUsed = allBookings.filter((b) => b.type !== "charter" && monthKey(b.date) === viewMonth).reduce((s, b) => s + b.hours, 0);
-    const monthSold = purchaseLog.filter((r) => monthKey(r.date) === viewMonth).reduce((s, r) => s + r.qty, 0);
+    const monthCharterRecords = charterLog.filter((r) => monthKey(r.bookDate) === viewMonth);
+    const monthNonCharterBookings = allBookings.filter((b) => b.type !== "charter" && monthKey(b.date) === viewMonth);
+    const monthExpected = monthNonCharterBookings.reduce((s, b) => s + b.hours, 0);
+    const monthUsedBookings = monthNonCharterBookings.filter((b) => b.date <= todayStr);
+    const monthUsed = monthUsedBookings.reduce((s, b) => s + b.hours, 0);
+    const monthUsedRevenue = monthUsedBookings.reduce((s, b) => s + (b.price || 0), 0);
+    const monthActualRevenue = monthUsedRevenue + monthCharter;
+    const monthDrinks = drinkSalesLog.filter((s) => monthKey(s.date) === viewMonth);
+    const monthDrinkAmount = monthDrinks.reduce((sum, s) => sum + s.amount, 0);
 
     // 各教練總付款（買堂 + 初始）
     const coachPaid = {};
@@ -1498,22 +1508,34 @@ export default function App() {
               <input style={S.select} type="month" value={viewMonth} onChange={(e) => setViewMonth(e.target.value)} />
             </div>
             <div style={S.kpiRow}>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月總收入" : `${viewMonth} 收入`}</div><div style={S.kpiBig}>${monthRevenue.toLocaleString()}</div></div>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已用時數" : "已用時數"}</div><div style={S.kpiBig}>{monthUsed}</div></div>
-              <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已購時數" : "已購時數"}</div><div style={S.kpiBig}>{monthSold}</div></div>
-              {(() => {
-                const monthDrinks = drinkSalesLog.filter((s) => monthKey(s.date) === viewMonth);
-                const drinkAmount = monthDrinks.reduce((sum, s) => sum + s.amount, 0);
-                const drinkQty = monthDrinks.reduce((sum, s) => sum + s.items.reduce((a, it) => a + it.qty, 0), 0);
-                return (
-                  <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => { setAdminTab("records"); setRecordsView("drinks"); }}>
-                    <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月飲品銷售" : "飲品銷售"}</div>
-                    <div style={S.kpiBig}>${drinkAmount.toLocaleString()}（{drinkQty}支）</div>
-                  </div>
-                );
-              })()}
+              <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => setKpiDetailModal("revenue")}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月總收入" : `${viewMonth} 總收入`}</div>
+                <div style={S.kpiBig}>${monthPurchase.toLocaleString()}</div>
+              </div>
+              <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => setKpiDetailModal("actual")}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "實際收入" : `${viewMonth} 實際收入`}</div>
+                <div style={S.kpiBig}>${monthActualRevenue.toLocaleString()}</div>
+              </div>
+              <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => setKpiDetailModal("charter")}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "其他租場收費" : `${viewMonth} 其他租場收費`}</div>
+                <div style={S.kpiBig}>${monthCharter.toLocaleString()}</div>
+              </div>
+              <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => setKpiDetailModal("expected")}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已book時數" : "已book時數"}</div>
+                <div style={S.kpiBig}>{monthExpected}</div>
+              </div>
+              <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => setKpiDetailModal("used")}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已用時數(至今)" : "已用時數"}</div>
+                <div style={S.kpiBig}>{monthUsed}</div>
+              </div>
+              <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => setKpiDetailModal("drinks")}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月飲品銷售" : "飲品銷售"}</div>
+                <div style={S.kpiBig}>${monthDrinkAmount.toLocaleString()}</div>
+              </div>
             </div>
             <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}　｜　累計已用時數 {totalUsed}　｜　累計已購時數 {totalSold}</p>
+            <p style={S.assistHint}>※ 撳任何一張KPI卡可以睇返呢個月嘅逐筆明細。</p>
+
 
             <div style={{ ...S.flexBetween, marginBottom: 0 }}>
               <h2 style={S.sectionTitle}>每月收入</h2>
@@ -2460,6 +2482,67 @@ export default function App() {
               <button style={S.modalConfirm} onClick={() => { doCancel(adminCancelModal.date, adminCancelModal.start, adminCancelModal.coachId, adminCancelModal.type, true); setAdminCancelModal(null); }}>確認取消</button>
             </div>
           </div></div>
+          );
+        })()}
+
+        {kpiDetailModal && (() => {
+          let title = "", sub = "", total = "", rows = [];
+          if (kpiDetailModal === "revenue") {
+            title = "本月總收入";
+            sub = "Pass 購買現金（唔包括包場/小組）";
+            total = `$${monthPurchase.toLocaleString()}`;
+            rows = monthPurchaseRecords.map((r) => ({ main: r.coachName, sub: `${r.date} · +${r.qty} 小時`, val: `$${r.amount.toLocaleString()}` }));
+          } else if (kpiDetailModal === "actual") {
+            title = "實際收入";
+            sub = "已用時數(至今,非包場)金額 ＋ 包場/小組收入";
+            total = `$${monthActualRevenue.toLocaleString()}`;
+            rows = [
+              ...monthUsedBookings.map((b) => ({ main: `${b.type === "duo" ? "1對2" : "1對1"} · ${b.coachName || getCoach(b.coachId)?.name || ""}`, sub: `${b.date} ${b.start}`, val: `$${(b.price || 0).toLocaleString()}` })),
+              ...monthCharterRecords.map((r) => ({ main: rentalFull(r.charterType), sub: `${r.bookDate} ${r.start}`, val: `$${r.amount.toLocaleString()}` })),
+            ];
+          } else if (kpiDetailModal === "charter") {
+            title = "其他租場收費";
+            sub = "包場/小組金額";
+            total = `$${monthCharter.toLocaleString()}`;
+            rows = monthCharterRecords.map((r) => ({ main: rentalFull(r.charterType), sub: `${r.bookDate} ${r.start}–${addMinutes(r.start, r.hours * 60)}${r.coachName ? " · " + r.coachName : ""}`, val: `$${r.amount.toLocaleString()}` }));
+          } else if (kpiDetailModal === "expected") {
+            title = "本月已book時數";
+            sub = "呢個月成個已book嘅非包場時數（唔理過咗未）";
+            total = `${monthExpected} 小時`;
+            rows = monthNonCharterBookings.map((b) => ({ main: `${b.type === "duo" ? "1對2" : "1對1"} · ${b.coachName || getCoach(b.coachId)?.name || ""}`, sub: `${b.date} ${b.start}`, val: `${b.hours} 小時` }));
+          } else if (kpiDetailModal === "used") {
+            title = "本月已用時數(至今)";
+            sub = "到今日為止已經發生咗嘅非包場堂";
+            total = `${monthUsed} 小時`;
+            rows = monthUsedBookings.map((b) => ({ main: `${b.type === "duo" ? "1對2" : "1對1"} · ${b.coachName || getCoach(b.coachId)?.name || ""}`, sub: `${b.date} ${b.start}`, val: `${b.hours} 小時` }));
+          } else if (kpiDetailModal === "drinks") {
+            title = "本月飲品銷售";
+            sub = "淨係顯示金額，唔顯示支數";
+            total = `$${monthDrinkAmount.toLocaleString()}`;
+            rows = monthDrinks.map((s) => ({ main: s.coachName, sub: s.items.map((it) => `${it.name} x${it.qty}`).join("、"), val: `$${s.amount.toLocaleString()}` }));
+          }
+          return (
+            <div style={S.modalOverlay} onClick={() => setKpiDetailModal(null)}>
+              <div style={S.modal} onClick={(e) => e.stopPropagation()}>
+                <h3 style={S.modalTitle}>{title}</h3>
+                <p style={{ ...S.modalText, marginBottom: 14 }}>{sub}　·　{viewMonth}</p>
+                <div style={{ ...S.ledgerTotal, marginTop: 0, marginBottom: 14 }}>{total}</div>
+                {rows.length === 0 ? <p style={S.emptyText}>呢個月暫無記錄</p> : (
+                  <div style={{ textAlign: "left" }}>
+                    {rows.map((r, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "8px 0", borderBottom: "1px solid #222", gap: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 13, color: "#ddd" }}>{r.main}</div>
+                          <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>{r.sub}</div>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#4ECDC4", whiteSpace: "nowrap" }}>{r.val}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button style={{ ...S.modalCancel, width: "100%", marginTop: 16 }} onClick={() => setKpiDetailModal(null)}>關閉</button>
+              </div>
+            </div>
           );
         })()}
 
