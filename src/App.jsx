@@ -7,15 +7,15 @@ import {
 } from "./constants.js";
 import {
   BRAND_NAME, LOGO, STAMP_PNG, DEFAULT_COACHES, DEFAULT_SUBADMINS,
-  MAX_CONCURRENT, DUO_BASE, DUO_HALF_HOUR_ADD, CHARTER_PRICE,
+  MAX_CONCURRENT, CHARTER_PRICE,
   ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS,
   DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
   PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS,
-  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText, retroactiveBookingReminderText, suspiciousCancelText,
+  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText, retroactiveBookingReminderText, suspiciousCancelText, drinkOrderNoticeText,
 } from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
-  stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
+  stableStringify, initialSession, isWholeVenue, rentalShort, rentalFull,
   isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
   hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel, bookedByLabel, nowStamp, closedDayMessage,
 } from "./helpers.js";
@@ -179,6 +179,7 @@ export default function App() {
   const [viewMonth, setViewMonth] = useState(() => monthKey(formatDate(new Date())));
   const [overviewDate, setOverviewDate] = useState(() => formatDate(new Date())); // 總覽「場地使用」卡而家睇緊邊一日，可以往前/往後揀
   const [monthsExpanded, setMonthsExpanded] = useState(false);
+  const [incomeDetailMonth, setIncomeDetailMonth] = useState(null); // 每月收入卡「睇明細」展開緊邊個月份+邊個類別，例如 "2026-07:purchase"
   const [newStudentName, setNewStudentName] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
   const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
@@ -503,7 +504,13 @@ export default function App() {
     setDrinkSalesLog((prev) => [sale, ...prev]);
     setDrinkCart({});
     setDrinkQrModal(null);
-    showToast("已記錄，等 admin 核實返有冇過數");
+    if (whatsappNumber) {
+      const msg = encodeURIComponent(drinkOrderNoticeText(sale.coachName, sale.items, sale.amount, sale.date, sale.time));
+      window.open(`https://wa.me/${whatsappNumber}?text=${msg}`, "_blank");
+      showToast("已記錄，WhatsApp 已開啟俾你通知 admin");
+    } else {
+      showToast("已記錄，等 admin 核實返有冇過數（管理員未設定WhatsApp號碼，未能自動開WhatsApp）");
+    }
   };
   // Admin修改飲品訂單內容（改支數/價錢），重新計算金額
   const updateDrinkSale = (id, items) => {
@@ -1341,8 +1348,19 @@ export default function App() {
 
     // 一筆過租金（買堂）收入，按入數月份
     const purchaseByMonth = {};
-    purchaseLog.forEach((r) => { const m = monthKey(r.date); purchaseByMonth[m] = (purchaseByMonth[m] || 0) + r.amount; });
-    coaches.forEach((c) => { const init = initialCreditsOf(c); if (init > 0) purchaseByMonth["初始"] = (purchaseByMonth["初始"] || 0) + init * c.rate; });
+    const purchaseDetailByMonth = {};
+    purchaseLog.forEach((r) => {
+      const m = monthKey(r.date);
+      purchaseByMonth[m] = (purchaseByMonth[m] || 0) + r.amount;
+      (purchaseDetailByMonth[m] = purchaseDetailByMonth[m] || []).push(r);
+    });
+    coaches.forEach((c) => {
+      const init = initialCreditsOf(c);
+      if (init > 0) {
+        purchaseByMonth["初始"] = (purchaseByMonth["初始"] || 0) + init * c.rate;
+        (purchaseDetailByMonth["初始"] = purchaseDetailByMonth["初始"] || []).push({ coachName: c.name, qty: init, amount: init * c.rate, isInitial: true });
+      }
+    });
 
     // 所有 booking（去重，每節一條），附帶實際收費
     const allBookings = [];
@@ -1355,9 +1373,14 @@ export default function App() {
     });
     allBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
 
-    // 實際堂數收入，按 booking 月份
+    // 實際堂數收入，按 booking 月份，連埋逐筆明細
     const classByMonth = {};
-    allBookings.forEach((b) => { const m = monthKey(b.date); classByMonth[m] = (classByMonth[m] || 0) + (b.price || 0); });
+    const classDetailByMonth = {};
+    allBookings.forEach((b) => {
+      const m = monthKey(b.date);
+      classByMonth[m] = (classByMonth[m] || 0) + (b.price || 0);
+      if (b.price > 0) (classDetailByMonth[m] = classDetailByMonth[m] || []).push(b);
+    });
 
     // 月份清單（兩個來源合併）
     const allMonths = Array.from(new Set([...Object.keys(purchaseByMonth), ...Object.keys(classByMonth)]))
@@ -1499,13 +1522,46 @@ export default function App() {
               )}
             </div>
             <div style={S.bookingList}>
-              {allMonths.length === 0 ? <p style={S.emptyText}>暫無收入</p> : (monthsExpanded ? allMonths : allMonths.slice(0, 6)).map((m) => (
-                <div key={m} style={S.monthCard}>
-                  <div style={S.monthHead}>{m === "初始" ? "初始已售時數" : m}</div>
-                  <div style={S.monthRow}><span style={S.monthLabel}>一筆過租金（買堂）</span><span style={S.revenueNum}>${(purchaseByMonth[m] || 0).toLocaleString()}</span></div>
-                  <div style={S.monthRow}><span style={S.monthLabel}>實際堂數收入</span><span style={S.classNum}>${(classByMonth[m] || 0).toLocaleString()}</span></div>
-                </div>
-              ))}
+              {allMonths.length === 0 ? <p style={S.emptyText}>暫無收入</p> : (monthsExpanded ? allMonths : allMonths.slice(0, 6)).map((m) => {
+                const purchaseKey = `${m}:purchase`, classKey = `${m}:class`;
+                const purchaseOpen = incomeDetailMonth === purchaseKey, classOpen = incomeDetailMonth === classKey;
+                const pDetails = purchaseDetailByMonth[m] || [], cDetails = classDetailByMonth[m] || [];
+                return (
+                  <div key={m} style={S.monthCard}>
+                    <div style={S.monthHead}>{m === "初始" ? "初始已售時數" : m}</div>
+                    <div style={{ ...S.monthRow, cursor: pDetails.length ? "pointer" : "default" }}
+                      onClick={() => pDetails.length && setIncomeDetailMonth(purchaseOpen ? null : purchaseKey)}>
+                      <span style={S.monthLabel}>一筆過租金（買堂）{pDetails.length ? (purchaseOpen ? " ▲" : " ▼") : ""}</span>
+                      <span style={S.revenueNum}>${(purchaseByMonth[m] || 0).toLocaleString()}</span>
+                    </div>
+                    {purchaseOpen && (
+                      <div style={{ padding: "4px 0 8px", borderBottom: "1px solid #222" }}>
+                        {pDetails.map((r, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "3px 0" }}>
+                            <span>{r.isInitial ? `${r.coachName}（初始已購）` : `${r.date} · ${r.coachName}`} · {r.qty}小時</span>
+                            <span>${r.amount.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ ...S.monthRow, cursor: cDetails.length ? "pointer" : "default" }}
+                      onClick={() => cDetails.length && setIncomeDetailMonth(classOpen ? null : classKey)}>
+                      <span style={S.monthLabel}>實際堂數收入{cDetails.length ? (classOpen ? " ▲" : " ▼") : ""}</span>
+                      <span style={S.classNum}>${(classByMonth[m] || 0).toLocaleString()}</span>
+                    </div>
+                    {classOpen && (
+                      <div style={{ padding: "4px 0 4px" }}>
+                        {cDetails.map((b, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "3px 0" }}>
+                            <span>{b.date} {b.start} · {b.type === "charter" ? rentalFull(b.charterType) : (b.coachName || "")}{b.type === "duo" ? "（1對2）" : ""}</span>
+                            <span>${b.price.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             {!monthsExpanded && allMonths.length > 6 && <p style={S.assistHint}>顯示最近 6 個月，撳上面「顯示全部」睇齊歷史。</p>}
             <p style={S.assistHint}>「一筆過租金」= 教練買堂時實收現金；「實際堂數收入」= 當月實際 book 咗嘅堂（一對一／一對二／包場）價值。</p>
@@ -1913,7 +1969,7 @@ export default function App() {
           <div style={S.container}>
             {currentUser.role === "admin" && (
               <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 2px 10px", marginBottom: 6, position: "sticky", top: 0, background: "#0f0f0f", zIndex: 30 }}>
-                {[["set-password", "密碼"], ["set-admin-phone", "管理員電話"], ["set-notice", "場地公告"], ["set-qr-account", "收款QR"], ["set-drinks", "飲品"], ["set-calendar", "日曆同步"], ["set-whatsapp", "WhatsApp"], ["set-suggestions", "意見箱"], ["set-export", "備份"], ["set-subadmins", "副管理員"], ["set-reset", "重設資料"]].map(([id, label]) => (
+                {[["set-drinks", "飲品"], ["set-export", "備份"], ["set-suggestions", "意見箱"], ["set-notice", "場地公告"], ["set-admin-phone", "管理員電話"], ["set-whatsapp", "WhatsApp"], ["set-qr-account", "收款QR"], ["set-calendar", "日曆同步"], ["set-password", "密碼"], ["set-subadmins", "副管理員"], ["set-reset", "重設資料"]].map(([id, label]) => (
                   <button key={id} style={{ ...S.smallBtn, whiteSpace: "nowrap", flexShrink: 0 }}
                     onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>
                 ))}
@@ -1950,27 +2006,49 @@ export default function App() {
 
               </>
             )}
-            <h2 id="set-password" style={{ ...S.sectionTitle, marginTop: 28 }}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
+
+            <h2 id="set-export" style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料備份</h2>
             <div style={S.formCard}>
-              <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
-              <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
-              <Field label="確認新密碼"><input style={S.input} type="password" value={pwForm.new2} onChange={(e) => setPwForm({ ...pwForm, new2: e.target.value })} /></Field>
-              <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
+              <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出檔案可直接用 Google Sheets 或 Excel 打開，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄、取消記錄。建議定期備份。</p>
+              <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>📊 匯出 Google Sheet 備份</button>
+              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff", marginTop: 10 }} onClick={copyLedgerCsv}>📋 複製流水帳 (CSV)</button>
+              <p style={{ ...S.assistHint, marginTop: 10 }}>※ 若下載冇反應（手機 app 常見），可改按「複製流水帳」再貼入 Google Sheets / Excel；或喺電腦瀏覽器開啟再匯出。</p>
             </div>
-            <p style={S.assistHint}>※ 教練自己 book 堂、同 Admin 代教練 book 堂，而家統一用 Training Pass 制計費同扣減：$100/小時（1對2 額外多扣0.5小時），兩條path扣緊同一個時數池。</p>
 
             {currentUser.role === "admin" && (
               <>
+                <h2 id="set-suggestions" style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
+                <p style={S.assistHint}>教練透過「意見」分頁匿名提交，系統冇存任何身份資訊，連你都查唔到係邊位教練寫嘅。</p>
+                {suggestionBox.length === 0 ? <p style={S.emptyText}>暫無意見</p> : (
+                  <div style={S.bookingList}>
+                    {suggestionBox.map((sg) => (
+                      <div key={sg.id} style={{ ...S.bookingItem, opacity: sg.read ? 0.55 : 1 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={S.bookingTime}>{sg.date}</div>
+                          <div style={{ ...S.bookingCoach, fontWeight: 400, marginTop: 4, whiteSpace: "pre-wrap" }}>{sg.text}</div>
+                        </div>
+                        <button style={S.linkBtn} onClick={() => setSuggestionBox((prev) => prev.map((x) => x.id === sg.id ? { ...x, read: !x.read } : x))}>{sg.read ? "標記未閱" : "標記已閱"}</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <h2 id="set-notice" style={{ ...S.sectionTitle, marginTop: 28 }}>場地公告</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
+                  <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
+                </div>
+
                 <h2 id="set-admin-phone" style={{ ...S.sectionTitle, marginTop: 28 }}>管理員電話</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>用嚟WhatsApp核實可疑取消記錄（例如懷疑唔係本人操作）。教練睇唔到呢個號碼。</p>
                   <Field label="電話號碼"><input style={S.input} placeholder="例如 85291234567" value={adminPhone} onChange={(e) => setAdminPhone(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
                 </div>
 
-                <h2 id="set-notice" style={{ ...S.sectionTitle, marginTop: 28 }}>場地公告</h2>
+                <h2 id="set-whatsapp" style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
                 <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
-                  <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
+                  <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
                 </div>
 
                 <h2 id="set-qr-account" style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code</h2>
@@ -2010,38 +2088,17 @@ export default function App() {
                     </>
                   )}
                 </div>
-
-                <h2 id="set-whatsapp" style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
-                  <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
-                </div>
-
-                <h2 id="set-suggestions" style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
-                <p style={S.assistHint}>教練透過「意見」分頁匿名提交，系統冇存任何身份資訊，連你都查唔到係邊位教練寫嘅。</p>
-                {suggestionBox.length === 0 ? <p style={S.emptyText}>暫無意見</p> : (
-                  <div style={S.bookingList}>
-                    {suggestionBox.map((sg) => (
-                      <div key={sg.id} style={{ ...S.bookingItem, opacity: sg.read ? 0.55 : 1 }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={S.bookingTime}>{sg.date}</div>
-                          <div style={{ ...S.bookingCoach, fontWeight: 400, marginTop: 4, whiteSpace: "pre-wrap" }}>{sg.text}</div>
-                        </div>
-                        <button style={S.linkBtn} onClick={() => setSuggestionBox((prev) => prev.map((x) => x.id === sg.id ? { ...x, read: !x.read } : x))}>{sg.read ? "標記未閱" : "標記已閱"}</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </>
             )}
 
-            <h2 id="set-export" style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料備份</h2>
+            <h2 id="set-password" style={{ ...S.sectionTitle, marginTop: 28 }}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
             <div style={S.formCard}>
-              <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出檔案可直接用 Google Sheets 或 Excel 打開，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄、取消記錄。建議定期備份。</p>
-              <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>📊 匯出 Google Sheet 備份</button>
-              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff", marginTop: 10 }} onClick={copyLedgerCsv}>📋 複製流水帳 (CSV)</button>
-              <p style={{ ...S.assistHint, marginTop: 10 }}>※ 若下載冇反應（手機 app 常見），可改按「複製流水帳」再貼入 Google Sheets / Excel；或喺電腦瀏覽器開啟再匯出。</p>
+              <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
+              <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
+              <Field label="確認新密碼"><input style={S.input} type="password" value={pwForm.new2} onChange={(e) => setPwForm({ ...pwForm, new2: e.target.value })} /></Field>
+              <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
             </div>
+            <p style={S.assistHint}>※ 教練自己 book 堂、同 Admin 代教練 book 堂，而家統一用 Training Pass 制計費同扣減：$100/小時（1對2 額外多扣0.5小時），兩條path扣緊同一個時數池。</p>
 
             {currentUser.role === "admin" && (
               <>
