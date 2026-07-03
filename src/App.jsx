@@ -29,7 +29,7 @@ export default function App() {
   const [whatsappNumber, setWhatsappNumber] = useState(() => persisted("whatsappNumber", ""));
   const [venueNotice, setVenueNotice] = useState(() => persisted("venueNotice", ""));
   const [paymentQR, setPaymentQR] = useState(() => persisted("paymentQR", "")); // 收款 QR code（base64 圖），admin可隨時上傳/更新
-  const [adminPhone, setAdminPhone] = useState(() => persisted("adminPhone", "")); // 管理員電話，用嚟WhatsApp核實可疑取消記錄
+  const [adminPhone, setAdminPhone] = useState(() => persisted("adminPhone", "")); // 管理員電話，用嚟WhatsApp核實可疑取消記錄／飲品訂單自動通知
   const [suggestionBox, setSuggestionBox] = useState(() => persisted("suggestionBox", []));
   const [adminCalendarToken, setAdminCalendarToken] = useState(() => persisted("adminCalendarToken", ""));
   const [signatureStore, setSignatureStore] = useState(() => persisted("signatureStore", {})); // 簽名圖獨立存一份，唔跟住 booking 喺每個15分鐘格重複
@@ -505,12 +505,12 @@ export default function App() {
     setDrinkSalesLog((prev) => [sale, ...prev]);
     setDrinkCart({});
     setDrinkQrModal(null);
-    if (whatsappNumber) {
+    if (adminPhone) {
       const msg = encodeURIComponent(drinkOrderNoticeText(sale.coachName, sale.items, sale.amount, sale.date, sale.time));
-      window.open(`https://wa.me/${whatsappNumber}?text=${msg}`, "_blank");
+      window.open(`https://wa.me/${adminPhone}?text=${msg}`, "_blank");
       showToast("已記錄，WhatsApp 已開啟俾你通知 admin");
     } else {
-      showToast("已記錄，等 admin 核實返有冇過數（管理員未設定WhatsApp號碼，未能自動開WhatsApp）");
+      showToast("已記錄，等 admin 核實返有冇過數（管理員未設定電話，未能自動開WhatsApp）");
     }
   };
   // Admin修改飲品訂單內容（改支數/價錢），重新計算金額
