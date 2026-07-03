@@ -2466,6 +2466,48 @@ export default function App() {
             </div>
           </div></div>
         )}
+        {editDrinkSaleModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>修改飲品訂單</h3>
+            {editDrinkSaleModal.items.map((it, idx) => (
+              <div key={it.productId} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                <span style={{ flex: 1 }}>{it.name}（${it.price}/支）</span>
+                <button style={S.smallBtn} onClick={() => {
+                  const items = [...editDrinkSaleModal.items];
+                  items[idx] = { ...items[idx], qty: Math.max(0, items[idx].qty - 1) };
+                  setEditDrinkSaleModal({ ...editDrinkSaleModal, items });
+                }}>－</button>
+                <span style={{ minWidth: 20, textAlign: "center" }}>{it.qty}</span>
+                <button style={S.smallBtn} onClick={() => {
+                  const items = [...editDrinkSaleModal.items];
+                  items[idx] = { ...items[idx], qty: items[idx].qty + 1 };
+                  setEditDrinkSaleModal({ ...editDrinkSaleModal, items });
+                }}>＋</button>
+              </div>
+            ))}
+            <p style={S.amountPreview}>新金額：${editDrinkSaleModal.items.reduce((s, it) => s + it.price * it.qty, 0)}</p>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setEditDrinkSaleModal(null)}>取消</button>
+              <button style={S.modalConfirm} onClick={() => {
+                const items = editDrinkSaleModal.items.filter((it) => it.qty > 0);
+                if (items.length === 0) { showToast("最少要留低一款有數量嘅產品", "error"); return; }
+                updateDrinkSale(editDrinkSaleModal.id, items);
+                setEditDrinkSaleModal(null);
+              }}>儲存</button>
+            </div>
+          </div></div>
+        )}
+        {delDrinkSaleModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>剷除飲品訂單</h3>
+            <p style={S.modalText}>{delDrinkSaleModal.coachName}　{delDrinkSaleModal.items.map((it) => `${it.name}×${it.qty}`).join("、")}　${delDrinkSaleModal.amount}</p>
+            <p style={S.modalText}>確定剷除？此動作無法復原。</p>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setDelDrinkSaleModal(null)}>取消</button>
+              <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => { deleteDrinkSale(delDrinkSaleModal.id); setDelDrinkSaleModal(null); }}>確認剷除</button>
+            </div>
+          </div></div>
+        )}
         {toast && <Toast toast={toast} />}
       </div>
     );
@@ -3231,49 +3273,6 @@ export default function App() {
           <div style={S.modalBtns}>
             <button style={S.modalCancel} onClick={() => setDrinkQrModal(null)}>取消</button>
             <button style={S.modalConfirm} onClick={confirmDrinkSale}>已過數，發送記錄</button>
-          </div>
-        </div></div>
-      )}
-
-      {editDrinkSaleModal && (
-        <div style={S.modalOverlay}><div style={S.modal}>
-          <h3 style={S.modalTitle}>修改飲品訂單</h3>
-          {editDrinkSaleModal.items.map((it, idx) => (
-            <div key={it.productId} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-              <span style={{ flex: 1 }}>{it.name}（${it.price}/支）</span>
-              <button style={S.smallBtn} onClick={() => {
-                const items = [...editDrinkSaleModal.items];
-                items[idx] = { ...items[idx], qty: Math.max(0, items[idx].qty - 1) };
-                setEditDrinkSaleModal({ ...editDrinkSaleModal, items });
-              }}>－</button>
-              <span style={{ minWidth: 20, textAlign: "center" }}>{it.qty}</span>
-              <button style={S.smallBtn} onClick={() => {
-                const items = [...editDrinkSaleModal.items];
-                items[idx] = { ...items[idx], qty: items[idx].qty + 1 };
-                setEditDrinkSaleModal({ ...editDrinkSaleModal, items });
-              }}>＋</button>
-            </div>
-          ))}
-          <p style={S.amountPreview}>新金額：${editDrinkSaleModal.items.reduce((s, it) => s + it.price * it.qty, 0)}</p>
-          <div style={S.modalBtns}>
-            <button style={S.modalCancel} onClick={() => setEditDrinkSaleModal(null)}>取消</button>
-            <button style={S.modalConfirm} onClick={() => {
-              const items = editDrinkSaleModal.items.filter((it) => it.qty > 0);
-              if (items.length === 0) { showToast("最少要留低一款有數量嘅產品", "error"); return; }
-              updateDrinkSale(editDrinkSaleModal.id, items);
-              setEditDrinkSaleModal(null);
-            }}>儲存</button>
-          </div>
-        </div></div>
-      )}
-      {delDrinkSaleModal && (
-        <div style={S.modalOverlay}><div style={S.modal}>
-          <h3 style={S.modalTitle}>剷除飲品訂單</h3>
-          <p style={S.modalText}>{delDrinkSaleModal.coachName}　{delDrinkSaleModal.items.map((it) => `${it.name}×${it.qty}`).join("、")}　${delDrinkSaleModal.amount}</p>
-          <p style={S.modalText}>確定剷除？此動作無法復原。</p>
-          <div style={S.modalBtns}>
-            <button style={S.modalCancel} onClick={() => setDelDrinkSaleModal(null)}>取消</button>
-            <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => { deleteDrinkSale(delDrinkSaleModal.id); setDelDrinkSaleModal(null); }}>確認剷除</button>
           </div>
         </div></div>
       )}
