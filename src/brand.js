@@ -44,8 +44,14 @@ export const FPS_ID = "130208986";
 export const BANK_PAYEE_NAME = "GYMILY STUDIO LIMITED";
 export const SINGLE_CHARGE_PRICES = { solo: 200, duo: 250, private: 300 }; // 單次收費價目表（獨立於 Training Pass 制，純顯示用，畀新教練參考）
 
-export function onboardingFeeSheetText() {
-  return `📌 Gymily Studio 收費表
+// ---- 文本範本庫（第10項重構）：原本6份寫死嘅Onboarding文件，而家變做user可以自由編輯/新增嘅範本 ----
+// 呢度淨係做「首次載入嘅預設內容」，之後全部存喺 app 嘅 textTemplates state（可編輯、可刪、可加），唔再靠呢個function
+// {{教練名}} / {{時數}} 係支援嘅placeholder，發送嗰陣會自動代入（時數冇現成數字，留喺預覽度俾admin手動填）
+export const DEFAULT_TEXT_TEMPLATES = [
+  {
+    id: "tpl-fee",
+    name: "① 收費表",
+    content: `📌 ${BRAND_NAME} 收費表
 
 💵 單次收費
 1對1 　$${SINGLE_CHARGE_PRICES.solo} / 小時
@@ -71,11 +77,12 @@ export function onboardingFeeSheetText() {
 －－－－－－－－－－
 
 ✨ 買咗Training Pass之後，一律 $${PASS_HOURLY_RATE}/小時計算
-（1對2堂會喺原定時長之上，額外多扣0.5小時額度）`;
-}
-
-export function onboardingVenueRulesText() {
-  return `📌 場地使用守則
+（1對2堂會喺原定時長之上，額外多扣0.5小時額度）`,
+  },
+  {
+    id: "tpl-guide",
+    name: "② 場地守則",
+    content: `📌 場地使用守則
 
 ✅ 愛惜器材、保持整潔
 ✅ 注意安全，發現器材異常請即時通知
@@ -84,43 +91,34 @@ export function onboardingVenueRulesText() {
 －－－－－－－－－－
 
 離場程序：
-器材歸位 → 槓片拆除 → 關閉冷氣 → 關閉燈光 → 關閉其他設備`;
-}
+器材歸位 → 槓片拆除 → 關閉冷氣 → 關閉燈光 → 關閉其他設備`,
+  },
+  {
+    id: "tpl-payment",
+    name: "③ 付款資訊",
+    content: `📌 課程資料
 
-// 付款資訊：按「初始Pass時數」動態生成。hours 可以係 "" / null / undefined（未輸入），呢種情況要交畀 UI 判斷唔生成
-export function onboardingPaymentInfoText(hours) {
-  const bankBlock = `💵 付款方式
+方案：{{時數}}小時場地使用
+📅 有效期：付款日起計 6個月內使用完畢
+
+－－－－－－－－－－
+
+💵 付款方式
 ・請將費用轉帳至指定戶口
 ・完成付款後，請將付款紀錄發送予我們確認
 
 🏦 ${BANK_NAME}
 轉數快識別碼：${FPS_ID}
-收款人名稱：${BANK_PAYEE_NAME}`;
-  if (hours <= 5) {
-    return `📌 課程資料
-
-方案：首次Pass — ${hours}小時場地使用
+收款人名稱：${BANK_PAYEE_NAME}
 
 －－－－－－－－－－
 
-${bankBlock}`;
-  }
-  return `📌 課程資料
-
-方案：${hours}小時場地使用
-📅 有效期：付款日起計 6個月內使用完畢
-
-－－－－－－－－－－
-
-${bankBlock}
-
-－－－－－－－－－－
-
-收到付款確認後，我們會為你登記使用時數及有效期限，之後可按需要預約場地使用時間。`;
-}
-
-export function onboardingWelcomeText(coachName) {
-  return `${coachName}， 🎉 多謝你考慮加入 ${BRAND_NAME}！
+收到付款確認後，我們會為你登記使用時數及有效期限，之後可按需要預約場地使用時間。`,
+  },
+  {
+    id: "tpl-welcome",
+    name: "④ 歡迎訊息",
+    content: `{{教練名}}， 🎉 多謝你考慮加入 ${BRAND_NAME}！
 
 接下來會分幾次send返幾份重要資訊畀你：
 ・租場須知
@@ -128,11 +126,12 @@ export function onboardingWelcomeText(coachName) {
 
 麻煩你逐一查閱，有問題隨時搵我哋。
 
-準備好之後，就可以開始租場同接受預約喇！`;
-}
-
-export function onboardingRentalGuideText() {
-  return `📌 租場須知
+準備好之後，就可以開始租場同接受預約喇！`,
+  },
+  {
+    id: "tpl-rental",
+    name: "⑤ 租場須知",
+    content: `📌 租場須知
 
 ✅ 預約
 ・預約制，先預約先安排
@@ -141,11 +140,12 @@ export function onboardingRentalGuideText() {
 
 ✅ 更改及取消
 ・最少24小時通知
-・逾時按原定安排處理`;
-}
-
-export function onboardingTermsText() {
-  return `📌 使用條款
+・逾時按原定安排處理`,
+  },
+  {
+    id: "tpl-terms",
+    name: "⑥ 使用條款",
+    content: `📌 使用條款
 
 Training Pass：
 ・不設退款，不可兌換現金
@@ -154,8 +154,9 @@ Training Pass：
 
 －－－－－－－－－－
 
-如有查詢，歡迎隨時聯絡工作室。`;
-}
+如有查詢，歡迎隨時聯絡工作室。`,
+  },
+];
 
 // 第6項：Admin發現教練已上堂但未book返，發送嘅補book提醒（WhatsApp deep-link / 系統內部通知共用同一段文字）
 export function retroactiveBookingReminderText(coachName, date, startTime, endTime) {

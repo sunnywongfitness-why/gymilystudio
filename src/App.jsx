@@ -11,7 +11,7 @@ import {
   ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS,
   DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
   PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS,
-  onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText, retroactiveBookingReminderText, suspiciousCancelText, drinkOrderNoticeText,
+  retroactiveBookingReminderText, suspiciousCancelText, drinkOrderNoticeText, DEFAULT_TEXT_TEMPLATES,
 } from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
@@ -65,6 +65,11 @@ export default function App() {
   const [assistCancelLog, setAssistCancelLog] = useState(() => persisted("assistCancelLog", [])); // {coachId, month, date, start}
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
   const [drinkProducts, setDrinkProducts] = useState(() => persisted("drinkProducts", [])); // {id, name, price} 飲品產品清單，admin喺設定維護
+  const [textTemplates, setTextTemplates] = useState(() => persisted("textTemplates", DEFAULT_TEXT_TEMPLATES)); // {id, name, content} 文本範本庫，取代舊嘅寫死Onboarding文件，admin可自由編輯/新增/刪除
+  const [newTemplateForm, setNewTemplateForm] = useState({ name: "", content: "" });
+  const [sendTextCoachId, setSendTextCoachId] = useState("");
+  const [sendTextTemplateId, setSendTextTemplateId] = useState("");
+  const [sendTextPreview, setSendTextPreview] = useState("");
   const [drinkSalesLog, setDrinkSalesLog] = useState(() => persisted("drinkSalesLog", [])); // {id, coachId, coachName, items:[{productId,name,price,qty}], amount, date, time} 飲品銷售記錄，掛落教練account，唔追蹤買家（學生）身份
   const [adjustLog, setAdjustLog] = useState(() => persisted("adjustLog", [])); // {id, coachId, coachName, before, after, note, actorTag, at} 手動調整已用時數嘅記錄
   const [drinkCart, setDrinkCart] = useState({}); // { [productId]: qty } 揀緊嘅支數，未確認
@@ -102,6 +107,7 @@ export default function App() {
     if (d.assistCancelLog !== undefined) setAssistCancelLog(d.assistCancelLog);
     if (d.cancelLog !== undefined) setCancelLog(d.cancelLog);
     if (d.drinkProducts !== undefined) setDrinkProducts(d.drinkProducts);
+    if (d.textTemplates !== undefined) setTextTemplates(d.textTemplates);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
   };
@@ -117,7 +123,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -136,7 +142,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -152,7 +158,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -188,6 +194,8 @@ export default function App() {
   const [studentLogOpen, setStudentLogOpen] = useState(null);
   const [rosterSortMode, setRosterSortMode] = useState("custom"); // custom | used | remain | name
   const [resetModal, setResetModal] = useState(false);
+  const [purgeDate, setPurgeDate] = useState("");
+  const [purgeModal, setPurgeModal] = useState(false);
   const [delCoachModal, setDelCoachModal] = useState(null); // coach pending deletion
   const [showPasswords, setShowPasswords] = useState(false);
 
@@ -480,6 +488,72 @@ export default function App() {
   const removeDrinkProduct = (id) => {
     setDrinkProducts((prev) => prev.filter((p) => p.id !== id));
   };
+
+  // ---- 文本範本庫（第10項重構）：admin可自由編輯/新增/刪除範本，撳「發送文本」揀教練+範本，自動代入{{教練名}}，時數留喺預覽度手動填 ----
+  const addTemplate = () => {
+    const name = newTemplateForm.name.trim();
+    if (!name) { showToast("請輸入範本名稱", "error"); return; }
+    setTextTemplates((prev) => [...prev, { id: "tpl" + Date.now() + "-" + Math.random().toString(36).slice(2), name, content: newTemplateForm.content }]);
+    setNewTemplateForm({ name: "", content: "" });
+  };
+  const updateTemplate = (id, field, value) => {
+    setTextTemplates((prev) => prev.map((t) => t.id === id ? { ...t, [field]: value } : t));
+  };
+  const removeTemplate = (id) => {
+    setTextTemplates((prev) => prev.filter((t) => t.id !== id));
+    if (sendTextTemplateId === id) { setSendTextTemplateId(""); setSendTextPreview(""); }
+  };
+  // 撳「揀教練」／「揀範本」都要重新生成預覽：淨係自動代入{{教練名}}，{{時數}}冇現成數字，留低喺預覽度等admin自己手動填
+  const fillTemplatePreview = (templateId, coachId) => {
+    const tpl = textTemplates.find((t) => t.id === templateId);
+    if (!tpl) { setSendTextPreview(""); return; }
+    const coach = coaches.find((c) => String(c.id) === String(coachId));
+    setSendTextPreview(tpl.content.replaceAll("{{教練名}}", coach?.name || ""));
+  };
+  const handleSendText = () => {
+    const coach = coaches.find((c) => String(c.id) === String(sendTextCoachId));
+    if (!coach) { showToast("請先揀教練", "error"); return; }
+    if (!sendTextPreview.trim()) { showToast("請先揀範本", "error"); return; }
+    if (coach.phone) {
+      window.open(`https://wa.me/${coach.phone}?text=${encodeURIComponent(sendTextPreview)}`, "_blank");
+    } else {
+      setCopyInfoModal({ title: `發送文本畀 ${coach.name}`, text: sendTextPreview });
+    }
+  };
+
+  // ---- 清理歷史資料：批量剷除指定日期或之前嘅歷史記錄，釋放Supabase雲端儲存空間（教練帳戶、目前有效Pass時數唔會郁）----
+  const purgeCountsBefore = (cutoff) => {
+    if (!cutoff) return null;
+    const bookingCount = Object.keys(bookings).filter((k) => k.split("_")[0] <= cutoff).length;
+    const cancelCount = cancelLog.filter((r) => r.date <= cutoff).length;
+    const purchaseCount = purchaseLog.filter((r) => r.date <= cutoff).length;
+    const charterCount = charterLog.filter((r) => r.bookDate <= cutoff).length;
+    const drinkCount = drinkSalesLog.filter((r) => r.date <= cutoff).length;
+    const passUsageCount = passUsageLog.filter((r) => r.date <= cutoff).length;
+    const studentPurchaseCount = studentPurchaseLog.filter((r) => r.date <= cutoff).length;
+    const signatureCount = Object.keys(signatureStore).filter((k) => { const d = k.split("_")[1]; return d && d <= cutoff; }).length;
+    const total = bookingCount + cancelCount + purchaseCount + charterCount + drinkCount + passUsageCount + studentPurchaseCount + signatureCount;
+    return { bookingCount, cancelCount, purchaseCount, charterCount, drinkCount, passUsageCount, studentPurchaseCount, signatureCount, total };
+  };
+  const purgeHistoryBefore = (cutoff) => {
+    setBookings((prev) => {
+      const next = {};
+      Object.entries(prev).forEach(([k, arr]) => { if (k.split("_")[0] > cutoff) next[k] = arr; });
+      return next;
+    });
+    setCancelLog((prev) => prev.filter((r) => r.date > cutoff));
+    setPurchaseLog((prev) => prev.filter((r) => r.date > cutoff));
+    setCharterLog((prev) => prev.filter((r) => r.bookDate > cutoff));
+    setDrinkSalesLog((prev) => prev.filter((r) => r.date > cutoff));
+    setPassUsageLog((prev) => prev.filter((r) => r.date > cutoff));
+    setStudentPurchaseLog((prev) => prev.filter((r) => r.date > cutoff));
+    setSignatureStore((prev) => {
+      const next = {};
+      Object.entries(prev).forEach(([k, v]) => { const d = k.split("_")[1]; if (!d || d > cutoff) next[k] = v; });
+      return next;
+    });
+  };
+
   const drinkCartTotal = () => drinkProducts.reduce((sum, p) => sum + (Number(drinkCart[p.id]) || 0) * (Number(p.price) || 0), 0);
   const drinkCartCount = () => Object.values(drinkCart).reduce((sum, q) => sum + (Number(q) || 0), 0);
   const openDrinkCheckout = () => {
@@ -1793,11 +1867,6 @@ export default function App() {
                   <div style={{ flex: 1 }}>
                     <div style={S.bookingCoach}>{idx + 1}. {c.name} <span style={S.idTag}>@{c.username}</span></div>
                     <div style={S.bookingTime}>Pass時數 {c.used}/{c.credits} 小時　代book每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
-                    {(() => {
-                      const os = c.onboardingStatus || {};
-                      const done = ["payment", "welcome", "rental", "terms"].filter((k) => os[k]).length;
-                      return done > 0 && done < 4 ? <div style={{ fontSize: 11, color: "#FFB347" }}>Onboarding {done}/4</div> : done === 4 ? <div style={{ fontSize: 11, color: "#6BCB77" }}>Onboarding 完成 ✓</div> : null;
-                    })()}
                   </div>
                   <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 時數</button>
                   <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00", hours: 1 })}>⚠️ 提醒補book</button>
@@ -1991,7 +2060,7 @@ export default function App() {
           <div style={S.container}>
             {currentUser.role === "admin" && (
               <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 2px 10px", marginBottom: 6, position: "sticky", top: 0, background: "#0f0f0f", zIndex: 30 }}>
-                {[["set-drinks", "飲品"], ["set-export", "備份"], ["set-suggestions", "意見箱"], ["set-notice", "場地公告"], ["set-admin-phone", "管理員電話"], ["set-whatsapp", "WhatsApp"], ["set-qr-account", "收款QR"], ["set-calendar", "日曆同步"], ["set-password", "密碼"], ["set-subadmins", "副管理員"], ["set-reset", "重設資料"]].map(([id, label]) => (
+                {[["set-drinks", "飲品"], ["set-templates", "文本範本"], ["set-send-text", "發送文本"], ["set-export", "備份"], ["set-suggestions", "意見箱"], ["set-notice", "場地公告"], ["set-admin-phone", "管理員電話"], ["set-whatsapp", "WhatsApp"], ["set-qr-account", "收款QR"], ["set-calendar", "日曆同步"], ["set-password", "密碼"], ["set-subadmins", "副管理員"], ["set-purge", "清理歷史資料"], ["set-reset", "重設資料"]].map(([id, label]) => (
                   <button key={id} style={{ ...S.smallBtn, whiteSpace: "nowrap", flexShrink: 0 }}
                     onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>
                 ))}
@@ -2024,6 +2093,46 @@ export default function App() {
                     <input style={{ ...S.input, flex: 1 }} type="number" min="0" placeholder="$" value={newDrinkForm.price} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, price: e.target.value })} />
                   </div>
                   <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addDrinkProduct}>新增</button>
+                </div>
+
+                <h2 id="set-templates" style={{ ...S.sectionTitle, marginTop: 28 }}>文本範本庫</h2>
+                <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>可用 <code>{"{{教練名}}"}</code>、<code>{"{{時數}}"}</code> 呢類placeholder，喺下面「發送文本」揀教練嗰陣會自動代入（時數冇現成數字，留喺預覽度自己手打）。</p>
+                {textTemplates.map((t) => (
+                  <div key={t.id} style={S.formCard}>
+                    <Field label="範本名稱"><input style={S.input} value={t.name} onChange={(e) => updateTemplate(t.id, "name", e.target.value)} /></Field>
+                    <Field label="內文"><textarea style={{ ...S.input, minHeight: 140, resize: "vertical" }} value={t.content} onChange={(e) => updateTemplate(t.id, "content", e.target.value)} /></Field>
+                    <button style={{ ...S.delBtn }} onClick={() => removeTemplate(t.id)}>刪除呢個範本</button>
+                  </div>
+                ))}
+                <div style={S.formCard}>
+                  <Field label="新範本名稱"><input style={S.input} placeholder="例如：續約提醒" value={newTemplateForm.name} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, name: e.target.value })} /></Field>
+                  <Field label="新範本內文"><textarea style={{ ...S.input, minHeight: 100, resize: "vertical" }} value={newTemplateForm.content} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, content: e.target.value })} /></Field>
+                  <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addTemplate}>+ 新增範本</button>
+                </div>
+
+                <h2 id="set-send-text" style={{ ...S.sectionTitle, marginTop: 28 }}>發送文本俾教練</h2>
+                <div style={S.formCard}>
+                  <Field label="揀教練">
+                    <select style={S.select} value={sendTextCoachId} onChange={(e) => { setSendTextCoachId(e.target.value); fillTemplatePreview(sendTextTemplateId, e.target.value); }}>
+                      <option value="">請選擇</option>
+                      {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="揀範本">
+                    <select style={S.select} value={sendTextTemplateId} onChange={(e) => { setSendTextTemplateId(e.target.value); fillTemplatePreview(e.target.value, sendTextCoachId); }}>
+                      <option value="">請選擇</option>
+                      {textTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </Field>
+                  {sendTextTemplateId && (
+                    <>
+                      <Field label="預覽（可以手動修改先send，例如填返{{時數}}）"><textarea style={{ ...S.input, minHeight: 160, resize: "vertical" }} value={sendTextPreview} onChange={(e) => setSendTextPreview(e.target.value)} /></Field>
+                      <button style={S.loginBtn} onClick={handleSendText}>發送</button>
+                      {sendTextCoachId && !coaches.find((c) => String(c.id) === String(sendTextCoachId))?.phone && (
+                        <p style={{ ...S.assistHint, marginTop: 8 }}>呢位教練未填電話號碼，撳「發送」會生成文字畀你複製（唔會自動開 WhatsApp）。</p>
+                      )}
+                    </>
+                  )}
                 </div>
 
               </>
@@ -2161,6 +2270,35 @@ export default function App() {
 
             {currentUser.role === "admin" && (
               <>
+                <h2 id="set-purge" style={{ ...S.sectionTitle, marginTop: 28 }}>清理歷史資料</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>Supabase雲端係成份JSON一齊儲存，長年累月會愈存愈大（簽名圖片係主要嘅size大戶）。呢度可以批量剷走指定日期或之前嘅歷史記錄（bookings、取消/購買/包場/飲品/簽名等），釋放空間。教練帳戶、目前有效Pass時數唔會受影響。</p>
+                  <Field label="清走呢個日期（包括）或之前嘅記錄"><input style={S.input} type="date" value={purgeDate} onChange={(e) => setPurgeDate(e.target.value)} /></Field>
+                  {purgeDate && (() => {
+                    const c = purgeCountsBefore(purgeDate);
+                    return c.total === 0
+                      ? <p style={S.emptyText}>呢個日期之前冇任何記錄</p>
+                      : (
+                        <div style={{ ...S.purchaseBreakdown }}>
+                          <div style={{ fontSize: 13, color: "#ccc" }}>會剷走：</div>
+                          {c.bookingCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.bookingCount} 個bookings時段</div>}
+                          {c.cancelCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.cancelCount} 筆取消記錄</div>}
+                          {c.purchaseCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.purchaseCount} 筆購買時數記錄</div>}
+                          {c.charterCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.charterCount} 筆包場/小組記錄</div>}
+                          {c.drinkCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.drinkCount} 筆飲品記錄</div>}
+                          {c.passUsageCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.passUsageCount} 筆Pass使用記錄</div>}
+                          {c.studentPurchaseCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.studentPurchaseCount} 筆學生購買記錄</div>}
+                          {c.signatureCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.signatureCount} 張簽名圖片</div>}
+                        </div>
+                      );
+                  })()}
+                  <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff", marginTop: 10 }} disabled={!purgeDate || purgeCountsBefore(purgeDate)?.total === 0} onClick={() => setPurgeModal(true)}>🗑️ 清理歷史資料</button>
+                </div>
+              </>
+            )}
+
+            {currentUser.role === "admin" && (
+              <>
                 <h2 id="set-reset" style={{ ...S.sectionTitle, marginTop: 28 }}>重設資料</h2>
                 <div style={S.formCard}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>清除呢部裝置嘅所有資料，回復至初始狀態。建議先匯出備份。此動作無法復原。</p>
@@ -2173,30 +2311,6 @@ export default function App() {
 
         {editCoach && (
           <EditCoachModal coach={editCoach} onClose={() => setEditCoach(null)}
-            onOnboardingSend={(stepKey, coachName, initialPassHours, phone) => {
-              let text = "";
-              if (stepKey === "fee") text = onboardingFeeSheetText();
-              else if (stepKey === "guide") text = onboardingVenueRulesText();
-              else if (stepKey === "payment") {
-                const hrs = initialPassHours === "" || initialPassHours === null || initialPassHours === undefined ? NaN : Number(initialPassHours);
-                if (!hrs || hrs <= 0) { showToast("請先輸入初始 Pass 時數，先會生成付款資訊文字", "error"); return false; }
-                text = onboardingPaymentInfoText(hrs);
-              }
-              else if (stepKey === "welcome") text = onboardingWelcomeText(coachName);
-              else if (stepKey === "rental") text = onboardingRentalGuideText();
-              else if (stepKey === "terms") text = onboardingTermsText();
-              const stepLabels = { fee: "收費表", guide: "場地守則", payment: "付款資訊", welcome: "歡迎訊息", rental: "租場須知", terms: "使用條款" };
-              if (phone) {
-                window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, "_blank");
-              } else {
-                setCopyInfoModal({ title: `Onboarding：${stepLabels[stepKey] || ""}`, text });
-              }
-              const trackedKeys = ["payment", "welcome", "rental", "terms"];
-              if (trackedKeys.includes(stepKey) && editCoach?.id) {
-                setCoaches((prev) => prev.map((c) => c.id === editCoach.id ? { ...c, onboardingStatus: { ...(c.onboardingStatus || {}), [stepKey]: true } } : c));
-              }
-              return true;
-            }}
             onSave={(data) => {
               const uname = (data.username || "").trim().toLowerCase();
               if (!uname) { showToast("請輸入帳號名稱", "error"); return; }
@@ -2590,6 +2704,23 @@ export default function App() {
           );
         })()}
 
+        {purgeModal && (() => {
+          const c = purgeCountsBefore(purgeDate);
+          return (
+            <div style={S.modalOverlay}><div style={S.modal}>
+              <h3 style={S.modalTitle}>清理歷史資料</h3>
+              <p style={S.modalText}>確定剷走 {purgeDate} 或之前嘅全部 {c?.total ?? 0} 筆歷史記錄（bookings、取消/購買/包場/飲品/Pass使用/學生購買記錄、簽名圖）？<br /><br />教練帳戶同目前有效Pass時數唔會受影響。此動作無法復原，建議先匯出備份。</p>
+              <div style={S.modalBtns}>
+                <button style={S.modalCancel} onClick={() => setPurgeModal(false)}>返回</button>
+                <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
+                  purgeHistoryBefore(purgeDate);
+                  setPurgeModal(false); setPurgeDate("");
+                  showToast("已清理歷史資料");
+                }}>確認清理</button>
+              </div>
+            </div></div>
+          );
+        })()}
         {resetModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>重設所有資料</h3>
