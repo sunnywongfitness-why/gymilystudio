@@ -17,7 +17,7 @@ import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
   stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
   isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
-  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel,
+  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel, bookedByLabel,
 } from "./helpers.js";
 import { S } from "./styles.js";
 import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
@@ -289,7 +289,7 @@ export default function App() {
     if (liveUser.allowFilming !== true) { showToast("你冇拍片權限", "error"); return; }
     const err = canPlace(date, time, hours, MAX_CONCURRENT, currentUser.id, currentUser.id);
     if (err) { showToast(err, "error"); return; }
-    const entry = { coachId: currentUser.id, start: time, hours, type: "charter", charterType: "filming", price: 0, coachName: liveUser.name, students: [], createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const entry = { coachId: currentUser.id, start: time, hours, type: "charter", charterType: "filming", price: 0, coachName: liveUser.name, students: [], bookedBy: "coach", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
       slotsFor(time, hours).forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -346,6 +346,7 @@ export default function App() {
       const entry = {
         coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges,
         passPool: dedu.pool, passCost: dedu.amount, passLogId: dedu.pool !== "shared" ? logId : null, sharedPassId: dedu.pool === "shared" ? dedu.sharedId : null,
+        bookedBy: "coach",
         createdAt: new Date().toISOString().slice(0, 16).replace("T", " "),
       };
       wSlots.forEach((s) => {
@@ -461,6 +462,7 @@ export default function App() {
       coachId: currentUser.id, start, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges,
       passPool: dedu.pool, passCost: dedu.amount, passLogId: dedu.pool !== "shared" ? logId : null, sharedPassId: dedu.pool === "shared" ? dedu.sharedId : null,
       isRetroactive: true, // 第6項：標記呢個係事後補記錄，方便Admin流水帳分辨
+      bookedBy: "coach",
       createdAt: new Date().toISOString().slice(0, 16).replace("T", " "),
     };
     setBookings((prev) => {
@@ -531,7 +533,7 @@ export default function App() {
       const err = canPlace(date, time, hours, need);
       if (err) { showToast(err, "error"); return; }
       const slots = slotsFor(time, hours);
-      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
       setBookings((prev) => {
         const u = { ...prev };
         slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -552,7 +554,7 @@ export default function App() {
       const err = canPlace(wDate, time, hours, need);
       if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
       const wSlots = slotsFor(time, hours);
-      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
       wSlots.forEach((s) => {
         const key = `${wDate}_${s}`;
         newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
@@ -589,7 +591,7 @@ export default function App() {
     studentList.forEach((n) => { const s = coachRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
     const slots = slotsFor(time, hours);
     const filmingToCancel = findOverriddenFilming(date, slots, coachId);
-    const entry = { coachId, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const entry = { coachId, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
     setBookings((prev) => {
       const u = { ...prev };
       filmingToCancel.forEach((f) => {
@@ -1305,7 +1307,7 @@ export default function App() {
     const date = k.split("_")[0];
     arr.forEach((v) => {
       if (v.coachId === currentUser?.id && k === `${date}_${v.start}`)
-        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType || null, coachName: v.coachName || "", price: v.price || 0, rentalCost: v.rentalCost ?? (v.price || 0), students: v.students || [], studentCharges: v.studentCharges || {}, signatures: v.signatures || {} });
+        myBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType || null, coachName: v.coachName || "", price: v.price || 0, rentalCost: v.rentalCost ?? (v.price || 0), students: v.students || [], studentCharges: v.studentCharges || {}, signatures: v.signatures || {}, createdAt: v.createdAt || null, bookedBy: v.bookedBy || null });
     });
   });
   myBookings.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
@@ -1383,7 +1385,7 @@ export default function App() {
       const date = k.split("_")[0];
       arr.forEach((v) => {
         if (k === `${date}_${v.start}`)
-          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null, students: v.students || [], signatures: v.signatures || {} });
+          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null, bookedBy: v.bookedBy || null, students: v.students || [], signatures: v.signatures || {} });
       });
     });
     allBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
@@ -1851,7 +1853,7 @@ export default function App() {
                 <div style={S.recSummary}>共 {list.length} 項　｜　收入 ${sumRevenue.toLocaleString()}</div>
                 <div style={S.bookingList}>
                   {list.length === 0 ? <p style={S.emptyText}>冇符合條件嘅記錄</p> : list.map((b, i) => {
-                    const { date, start, hours, type, charterType, price, coachName, coach, coachId, students } = b;
+                    const { date, start, hours, type, charterType, price, coachName, coach, coachId, students, bookedBy } = b;
                     const key = `${date}_${start}_${coachId}_${type}`;
                     const open = recExpanded === key;
                     const isPast = new Date(`${date}T${start}:00`) < now;
@@ -1874,6 +1876,7 @@ export default function App() {
                             {type !== "charter" && <div>扣時數：{hours} 小時</div>}
                             {students && students.length > 0 && <div>學生：{students.join("、")}</div>}
                             <div>落單時間：{b.createdAt || "—（舊記錄）"}</div>
+                            <div>落單方式：{bookedByLabel(bookedBy)}</div>
                           </div>
                         )}
                       </div>
@@ -2804,6 +2807,7 @@ export default function App() {
             <div style={S.segRow}>
               <button style={myBookingsView === "list" ? S.segActive : S.seg} onClick={() => setMyBookingsView("list")}>📋 列表</button>
               <button style={myBookingsView === "calendar" ? S.segActive : S.seg} onClick={() => setMyBookingsView("calendar")}>📅 圖像</button>
+              <button style={myBookingsView === "cancelled" ? S.segActive : S.seg} onClick={() => setMyBookingsView("cancelled")}>🗑️ 已取消</button>
             </div>
           </div>
           {myBookingsView === "list" && (
@@ -2812,7 +2816,31 @@ export default function App() {
               <button style={myBookingsSortMode === "closest" ? S.segActive : S.seg} onClick={() => setMyBookingsSortMode("closest")}>距今日最近</button>
             </div>
           )}
-          {myBookingsView === "calendar" ? (
+          {myBookingsView === "cancelled" ? (() => {
+            const myCancelled = cancelLog.filter((r) => String(r.coachId) === String(currentUser.id)).sort((a, b) => (b.cancelledAt || "").localeCompare(a.cancelledAt || ""));
+            return (
+              <div style={{ marginTop: 14 }}>
+                {myCancelled.length === 0 ? <p style={S.emptyText}>暫無已取消嘅記錄</p> : (
+                  <div style={S.bookingList}>
+                    {myCancelled.map((r, i) => (
+                      <div key={i} style={S.bookingItem}>
+                        <div style={{ ...S.dot, background: "#FF6B6B" }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={S.bookingCoach}>
+                            {r.type === "charter" ? rentalFull(r.charterType) : r.type === "duo" ? "1對2" : "1對1"}{" "}
+                            <span style={S.cancelledTag}>{actorLabel(r.cancelledBy)}</span>
+                          </div>
+                          <div style={S.bookingTime}>原定 {r.date} · {r.start}–{addMinutes(r.start, r.hours * 60)}（{r.hours}小時）</div>
+                          <div style={{ fontSize: 11, color: "#666" }}>取消於 {r.cancelledAt}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p style={S.assistHint}>※ 顯示所有同你有關嘅取消記錄，唔理係你自己、Admin，定係副管理員取消嘅。</p>
+              </div>
+            );
+          })() : myBookingsView === "calendar" ? (
             <div style={{ marginTop: 14 }}>
               <div style={S.weekNav}>
                 <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
@@ -2869,7 +2897,7 @@ export default function App() {
             </div>
           ) : myBookingsSorted.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
             <div style={S.bookingList}>
-              {myBookingsSorted.map(({ date, start, hours, type, charterType, coachName, students, signatures }, i) => {
+              {myBookingsSorted.map(({ date, start, hours, type, charterType, coachName, students, signatures, createdAt, bookedBy }, i) => {
                 const hrs = hoursUntil(date, start);
                 const isPast = hrs < 0;
                 const isFilming = type === "charter" && charterType === "filming";
@@ -2880,6 +2908,7 @@ export default function App() {
                     <div style={{ flex: 1 }}>
                       <div style={S.bookingCoach}>{date} <span style={isFilming ? S.filmingTag : type === "duo" ? S.duoTag : S.soloTag}>{isFilming ? "🎬 拍片" : type === "duo" ? "1對2" : "1對1"}</span></div>
                       <div style={S.bookingTime}>{start} – {addMinutes(start, hours * 60)}（{hours}小時）</div>
+                      <div style={{ fontSize: 11, color: "#666" }}>{createdAt || "—（舊記錄）"}　{bookedByLabel(bookedBy)}</div>
                       {!isFilming && <button style={S.qrBtn} onClick={() => openWhatsAppQR(date, start, hours, liveUser.name)}>📲 攞 QR Code</button>}
                       {students && students.length > 0 && (
                         <div style={S.signRow}>

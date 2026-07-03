@@ -59,6 +59,14 @@ export function actorLabel(v) {
   if (typeof v === "string" && v.startsWith("subadmin:")) return `副管理員代取消（${v.slice(9)}）`;
   return v;
 }
+// 落單方式：呢筆booking係教練自己book，定係admin／副管理員代book（同 actorLabel 同一套 tag 格式，但文字係「book」唔係「取消」）
+export function bookedByLabel(v) {
+  if (!v) return "—（舊記錄）";
+  if (v === "coach") return "教練自己 book";
+  if (v === "admin") return "管理員代 book";
+  if (typeof v === "string" && v.startsWith("subadmin:")) return `副管理員代 book（${v.slice(9)}）`;
+  return v;
+}
 export const isClosedDay = (date) => CLOSED_DAYS.includes(new Date(`${date}T00:00:00`).getDay());
 // 教練顏色自動派：根據 coachId 用黃金角 hash 一個色相，固定飽和度/明度，可以無限擴展、相鄰ID易分辨、零人手介入
 // 注意：全app好多地方用緊 c.color + "33" 呢種hex尾加透明度嘅寫法（例如格仔背景），呢個function必須輸出 #rrggbb 格式，
