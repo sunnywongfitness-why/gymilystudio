@@ -10,14 +10,14 @@ import {
   MAX_CONCURRENT, DUO_BASE, DUO_HALF_HOUR_ADD, CHARTER_PRICE,
   ASSIST_CANCEL_LIMIT, LOW_CREDIT_THRESHOLD, CLOSED_DAYS,
   DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
-  PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS, SHARED_PASS_HOURS, SHARED_PASS_MONTHS,
+  PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS,
   onboardingFeeSheetText, onboardingVenueRulesText, onboardingPaymentInfoText, onboardingWelcomeText, onboardingRentalGuideText, onboardingTermsText, retroactiveBookingReminderText, suspiciousCancelText,
 } from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
   stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
   isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
-  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel, bookedByLabel,
+  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel, bookedByLabel, nowStamp,
 } from "./helpers.js";
 import { S } from "./styles.js";
 import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
@@ -36,7 +36,6 @@ export default function App() {
   const [filmingNotices, setFilmingNotices] = useState(() => persisted("filmingNotices", [])); // 拍片被頂走嘅通知
   const [retroBookingNotices, setRetroBookingNotices] = useState(() => persisted("retroBookingNotices", [])); // 第6項：Admin通知教練「已上堂但未book返」，教練首頁banner顯示，可撳入去補book
   const [passUsageLog, setPassUsageLog] = useState(() => persisted("passUsageLog", [])); // {id, coachId, date, hours, passType, sessionType} 教練自己book堂扣Pass時數嘅記錄，用嚟計「個人證」呢類受限類型仲剩幾多
-  const [sharedPasses, setSharedPasses] = useState(() => persisted("sharedPasses", [])); // {id, totalHours, usedHours, purchaseDate, expiryDate, coachIds:[id1,id2], usageByCoach:{[id]:hours}} 共享訓練通行證
   const [subAdmins, setSubAdmins] = useState(() => persisted("subAdmins", DEFAULT_SUBADMINS));
   const [view, setView] = useState(() => initialSession?.view || "login");
   // bookings: key date_time(15min) -> { coachId, start, hours, type }  (type: 'solo' | 'duo')
@@ -67,7 +66,7 @@ export default function App() {
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
   const [drinkProducts, setDrinkProducts] = useState(() => persisted("drinkProducts", [])); // {id, name, price} 飲品產品清單，admin喺設定維護
   const [drinkSalesLog, setDrinkSalesLog] = useState(() => persisted("drinkSalesLog", [])); // {id, coachId, coachName, items:[{productId,name,price,qty}], amount, date, time} 飲品銷售記錄，掛落教練account，唔追蹤買家（學生）身份
-  const [drinkOrderOpen, setDrinkOrderOpen] = useState(false); // 教練「其他」分頁入面，飲品訂購區塊係咪展開
+  const [adjustLog, setAdjustLog] = useState(() => persisted("adjustLog", [])); // {id, coachId, coachName, before, after, note, actorTag, at} 手動調整已用時數嘅記錄
   const [drinkCart, setDrinkCart] = useState({}); // { [productId]: qty } 揀緊嘅支數，未確認
   const [drinkQrModal, setDrinkQrModal] = useState(null); // { items, amount } 撳「下一步」之後顯示收款QR畀學生睇
   const [newDrinkForm, setNewDrinkForm] = useState({ name: "", price: "" }); // admin新增產品用嘅暫存輸入
@@ -94,7 +93,6 @@ export default function App() {
     if (d.filmingNotices !== undefined) setFilmingNotices(d.filmingNotices);
     if (d.retroBookingNotices !== undefined) setRetroBookingNotices(d.retroBookingNotices);
     if (d.passUsageLog !== undefined) setPassUsageLog(d.passUsageLog);
-    if (d.sharedPasses !== undefined) setSharedPasses(d.sharedPasses);
     if (d.invoiceCounter !== undefined) setInvoiceCounter(d.invoiceCounter);
     if (d.studentPurchaseLog !== undefined) setStudentPurchaseLog(d.studentPurchaseLog);
     if (d.subAdmins !== undefined) setSubAdmins(d.subAdmins);
@@ -105,6 +103,7 @@ export default function App() {
     if (d.cancelLog !== undefined) setCancelLog(d.cancelLog);
     if (d.drinkProducts !== undefined) setDrinkProducts(d.drinkProducts);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
+    if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
   };
 
   // 首次載入：雲端模式由雲端讀取（若雲端空白則上載目前本機資料），並訂閱即時變更
@@ -118,7 +117,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -137,7 +136,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -153,7 +152,7 @@ export default function App() {
       const ok = await cloudSave(bundle);
       setSyncState(ok ? "synced" : "error");
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, sharedPasses, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog]);
 
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
@@ -164,10 +163,9 @@ export default function App() {
   const [pwForm, setPwForm] = useState({ old: "", new1: "", new2: "" });
   const [editCoach, setEditCoach] = useState(null);
   const [addCreditModal, setAddCreditModal] = useState(null);
-  const [sharedPassModal, setSharedPassModal] = useState(null); // {coachIdA, coachIdB, date}（第9項：共享訓練通行證）
-  const [sharedTopUpModal, setSharedTopUpModal] = useState(null); // {sharedId, qty}（教練/admin都可以幫共享Pass加值）
-  const [editSharedPassModal, setEditSharedPassModal] = useState(null); // {id, totalHours, expiryDate} 修改共享Pass總時數／到期日
-  const [delSharedPassModal, setDelSharedPassModal] = useState(null); // 待刪除嘅共享Pass物件
+  const [adjustUsedModal, setAdjustUsedModal] = useState(null); // {coachId, used, note} 手動調整已用時數（處理歷史誤差，例如duo退款前後制度唔一致）
+  const [editDrinkSaleModal, setEditDrinkSaleModal] = useState(null); // 修改飲品訂單內容
+  const [delDrinkSaleModal, setDelDrinkSaleModal] = useState(null); // 待剷除嘅飲品訂單
   const [adminTab, setAdminTab] = useState(() => initialSession?.adminTab || "overview");
   const [recordsView, setRecordsView] = useState("bookings"); // bookings | cancelled
   const [recCoach, setRecCoach] = useState("all");
@@ -289,7 +287,7 @@ export default function App() {
     if (liveUser.allowFilming !== true) { showToast("你冇拍片權限", "error"); return; }
     const err = canPlace(date, time, hours, MAX_CONCURRENT, currentUser.id, currentUser.id);
     if (err) { showToast(err, "error"); return; }
-    const entry = { coachId: currentUser.id, start: time, hours, type: "charter", charterType: "filming", price: 0, coachName: liveUser.name, students: [], bookedBy: "coach", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const entry = { coachId: currentUser.id, start: time, hours, type: "charter", charterType: "filming", price: 0, coachName: liveUser.name, students: [], bookedBy: "coach", createdAt: nowStamp() };
     setBookings((prev) => {
       const u = { ...prev };
       slotsFor(time, hours).forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -319,8 +317,6 @@ export default function App() {
     // 本地追蹤仲有幾多 Pass 時數可用：跨 repeat 週次要遞減，唔可以靠實時 state（loop 入面 state 未更新）
     let personalLeft = personalRemaining(currentUser.id);
     let flexibleLeft = flexibleRemaining(currentUser.id);
-    const sharedLeftMap = {};
-    sharedPassesOf(currentUser.id).forEach((sp) => { sharedLeftMap[sp.id] = sharedRemaining(sp); });
 
     const allDeductions = []; // 逐週分配結果，成功晒先一次過 commit
     const newBookingsBySlot = {}; // `${date}_${slot}` -> entry to append
@@ -328,14 +324,10 @@ export default function App() {
     let okCount = 0, skippedDates = [];
     for (let w = 0; w < repeatWeeks; w++) {
       const wDate = w === 0 ? date : addDaysToDate(date, w * 7);
-      // 分池：solo 優先扣「個人證」（solo限定，用晒佢先，唔好嘥），唔夠先用「彈性／舊制」，再唔夠試共享 Pass
+      // 分池：solo 優先扣「個人證」（solo限定，用晒佢先，唔好嘥），唔夠先用「彈性／舊制」
       let dedu = null;
       if (sessionType === "solo" && personalLeft >= passCost) dedu = { pool: "personal", amount: passCost };
       else if (flexibleLeft >= passCost) dedu = { pool: "flexible", amount: passCost };
-      else {
-        const sharedId = Object.keys(sharedLeftMap).find((id) => sharedLeftMap[id] >= passCost);
-        if (sharedId) dedu = { pool: "shared", sharedId, amount: passCost };
-      }
       if (!dedu) { skippedDates.push(`${wDate}（Pass 時數不足）`); continue; }
       const err = canPlace(wDate, time, hours, 1, currentUser.id);
       if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
@@ -345,17 +337,16 @@ export default function App() {
       dedu.id = logId;
       const entry = {
         coachId: currentUser.id, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges,
-        passPool: dedu.pool, passCost: dedu.amount, passLogId: dedu.pool !== "shared" ? logId : null, sharedPassId: dedu.pool === "shared" ? dedu.sharedId : null,
+        passPool: dedu.pool, passCost: dedu.amount, passLogId: logId,
         bookedBy: "coach",
-        createdAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+        createdAt: nowStamp(),
       };
       wSlots.forEach((s) => {
         const key = `${wDate}_${s}`;
         newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
       });
       if (dedu.pool === "personal") personalLeft -= dedu.amount;
-      else if (dedu.pool === "flexible") flexibleLeft -= dedu.amount;
-      else sharedLeftMap[dedu.sharedId] -= dedu.amount;
+      else flexibleLeft -= dedu.amount;
       allDeductions.push(dedu);
       okCount++;
     }
@@ -416,7 +407,7 @@ export default function App() {
     const { coachId, coachName, date, start, hours } = retroReminderModal;
     if (!date || !start || !hours) { showToast("請填晒日期／時間／時長", "error"); return; }
     const end = addMinutes(start, Number(hours) * 60);
-    const notice = { id: "rb" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId, date, start, hours: Number(hours), read: false, createdAt: new Date().toISOString() };
+    const notice = { id: "rb" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId, date, start, hours: Number(hours), read: false, createdAt: nowStamp() };
     setRetroBookingNotices((prev) => [notice, ...prev]);
     const text = retroactiveBookingReminderText(coachName, date, start, end);
     const coach = getCoach(coachId);
@@ -429,7 +420,7 @@ export default function App() {
     setRetroReminderModal(null);
   };
 
-  // 第6項：教練撳首頁banner後嘅補book——跟confirmBook同一套Pass分配邏輯（個人證優先→彈性→共享），但淨係單一時段、唔重複
+  // 第6項：教練撳首頁banner後嘅補book——跟confirmBook同一套Pass分配邏輯（個人證優先→彈性），但淨係單一時段、唔重複
   // 過去時段都要做完整衝突檢查（如果嗰時段已經俾第二個教練book咗，要擋住畀admin人手處理）
   const confirmRetroBooking = () => {
     const { noticeId, date, start, hours, sessionType } = retroBookModal;
@@ -451,19 +442,15 @@ export default function App() {
     let dedu = null;
     if (sessionType === "solo" && personalLeft >= passCost) dedu = { pool: "personal", amount: passCost };
     else if (flexibleLeft >= passCost) dedu = { pool: "flexible", amount: passCost };
-    else {
-      const sp = sharedPassesOf(currentUser.id).find((s) => sharedRemaining(s) >= passCost);
-      if (sp) dedu = { pool: "shared", sharedId: sp.id, amount: passCost };
-    }
     if (!dedu) { showToast("Pass時數不足，請聯絡Admin增購", "error"); return; }
     const logId = "pu" + Date.now() + "-" + Math.random().toString(36).slice(2);
     dedu.id = logId;
     const entry = {
       coachId: currentUser.id, start, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges,
-      passPool: dedu.pool, passCost: dedu.amount, passLogId: dedu.pool !== "shared" ? logId : null, sharedPassId: dedu.pool === "shared" ? dedu.sharedId : null,
+      passPool: dedu.pool, passCost: dedu.amount, passLogId: logId,
       isRetroactive: true, // 第6項：標記呢個係事後補記錄，方便Admin流水帳分辨
       bookedBy: "coach",
-      createdAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+      createdAt: nowStamp(),
     };
     setBookings((prev) => {
       const u = { ...prev };
@@ -511,12 +498,34 @@ export default function App() {
       amount: drinkQrModal.amount,
       date: formatDate(new Date()),
       time: new Date().toTimeString().slice(0, 5),
+      read: false, // Admin總覽未讀通知用
     };
     setDrinkSalesLog((prev) => [sale, ...prev]);
     setDrinkCart({});
     setDrinkQrModal(null);
-    setDrinkOrderOpen(false);
-    showToast("已記錄，請提提學生完成轉數");
+    showToast("已記錄，等 admin 核實返有冇過數");
+  };
+  // Admin修改飲品訂單內容（改支數/價錢），重新計算金額
+  const updateDrinkSale = (id, items) => {
+    const amount = items.reduce((s, it) => s + it.price * it.qty, 0);
+    setDrinkSalesLog((prev) => prev.map((s) => s.id === id ? { ...s, items, amount } : s));
+    showToast("已更新飲品訂單");
+  };
+  const deleteDrinkSale = (id) => {
+    setDrinkSalesLog((prev) => prev.filter((s) => s.id !== id));
+    showToast("已剷除飲品訂單");
+  };
+  // Admin手動調整教練「已用時數」：處理歷史誤差（例如duo扣減公式改過，舊交易退款金額對唔上），連埋備註方便追溯
+  const adjustCoachUsed = (coachId, used, note) => {
+    const coach = getCoach(coachId);
+    setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used } : c));
+    setAdjustLog((prev) => [{
+      id: "adj" + Date.now() + "-" + Math.random().toString(36).slice(2),
+      coachId, coachName: coach?.name || "", before: coach?.used ?? null, after: used, note: note || "",
+      actorTag: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin",
+      at: nowStamp(),
+    }, ...prev]);
+    showToast("已調整已用時數");
   };
 
   // ADMIN: place a rental (包場/小組=全場2位, 試堂=1位), price editable
@@ -533,13 +542,13 @@ export default function App() {
       const err = canPlace(date, time, hours, need);
       if (err) { showToast(err, "error"); return; }
       const slots = slotsFor(time, hours);
-      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: nowStamp() };
       setBookings((prev) => {
         const u = { ...prev };
         slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
         return u;
       });
-      setCharterLog((prev) => [{ date: new Date().toISOString().slice(0, 16).replace("T", " "), bookDate: date, start: time, hours, charterType, amount: amt, coachName: coachName || "" }, ...prev]);
+      setCharterLog((prev) => [{ date: nowStamp(), bookDate: date, start: time, hours, charterType, amount: amt, coachName: coachName || "" }, ...prev]);
       showToast(`已落${rentalFull(charterType)}（$${amt}）`);
       setCharterModal(null);
       return;
@@ -554,12 +563,12 @@ export default function App() {
       const err = canPlace(wDate, time, hours, need);
       if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
       const wSlots = slotsFor(time, hours);
-      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: nowStamp() };
       wSlots.forEach((s) => {
         const key = `${wDate}_${s}`;
         newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
       });
-      logsToAdd.push({ date: new Date().toISOString().slice(0, 16).replace("T", " "), bookDate: wDate, start: time, hours, charterType, amount: amt, coachName: coachName || "" });
+      logsToAdd.push({ date: nowStamp(), bookDate: wDate, start: time, hours, charterType, amount: amt, coachName: coachName || "" });
       okCount++;
     }
     if (okCount === 0) { showToast(skippedDates[0] || "預約失敗", "error"); return; }
@@ -591,7 +600,7 @@ export default function App() {
     studentList.forEach((n) => { const s = coachRoster.find((x) => x.name === n); studentCharges[n] = s ? (s.rate || 0) : 0; });
     const slots = slotsFor(time, hours);
     const filmingToCancel = findOverriddenFilming(date, slots, coachId);
-    const entry = { coachId, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: new Date().toISOString().slice(0, 16).replace("T", " ") };
+    const entry = { coachId, start: time, hours, type: sessionType, price, rentalCost, students: studentList, studentCharges, bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: nowStamp() };
     setBookings((prev) => {
       const u = { ...prev };
       filmingToCancel.forEach((f) => {
@@ -653,15 +662,10 @@ export default function App() {
       coachName: meta.type === "charter" ? (meta.coachName || "") : (getCoach(coachId)?.name || ""),
       price: meta.price || 0,
       cancelledBy: actorTag,
-      cancelledAt: new Date().toISOString().slice(0, 16).replace("T", " "),
+      cancelledAt: nowStamp(),
     }, ...prev]);
     if (meta.type !== "charter") {
-      if (meta.passPool === "shared" && meta.sharedPassId) {
-        // 共享 Pass 退款：完全唔掂 coach.credits/used，淨係退返嗰張共享 Pass 自己嘅額度
-        setSharedPasses((prev) => prev.map((sp) => sp.id === meta.sharedPassId
-          ? { ...sp, usedHours: Math.max(0, (sp.usedHours || 0) - (meta.passCost || 0)), usageByCoach: { ...(sp.usageByCoach || {}), [coachId]: Math.max(0, ((sp.usageByCoach || {})[coachId] || 0) - (meta.passCost || 0)) } }
-          : sp));
-      } else if (meta.passPool && meta.passLogId) {
+      if (meta.passPool && meta.passLogId) {
         // 個人證／彈性池退款：移走返個對應嘅 passUsageLog 記錄，同退返 coach.used
         setPassUsageLog((prev) => prev.filter((x) => x.id !== meta.passLogId));
         setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: Math.max(0, c.used - (meta.passCost || meta.hours)) } : c));
@@ -688,7 +692,7 @@ export default function App() {
     const meta = startArr.find((e) => e.coachId === coachId && e.start === start && e.type === type);
     if (!meta) return;
     const slots = slotsFor(start, meta.hours);
-    const signedAt = new Date().toISOString().slice(0, 16).replace("T", " ");
+    const signedAt = nowStamp();
     const sigKey = `${coachId}_${date}_${start}_${studentName}`;
     // 簽名圖（重嘅 base64 PNG）獨立存一份，唔再跟住 booking 喺每個15分鐘格重複存——大幅減少資料庫用量
     setSignatureStore((prev) => ({ ...prev, [sigKey]: { dataUrl, signedAt } }));
@@ -779,7 +783,7 @@ export default function App() {
     const s = myRoster.find((x) => x.name === name);
     if (!s) return;
     updateStudentField(name, "credits", (s.credits || 0) + qty);
-    setStudentPurchaseLog((prev) => [{ id: "sp" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: currentUser.id, studentName: name, date: date || new Date().toISOString().slice(0, 10), expiryDate: expiryDate || "", qty, rate: s.rate || 0, amount: (s.rate || 0) * qty }, ...prev]);
+    setStudentPurchaseLog((prev) => [{ id: "sp" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId: currentUser.id, studentName: name, date: date || formatDate(new Date()), expiryDate: expiryDate || "", qty, rate: s.rate || 0, amount: (s.rate || 0) * qty }, ...prev]);
     showToast(`已為 ${name} 增加 ${qty} 堂`);
   };
 
@@ -880,35 +884,8 @@ export default function App() {
     const amount = qty * rate;
     const actorTag = currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin";
     setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, credits: c.credits + qty } : c));
-    setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: date || new Date().toISOString().slice(0, 10), coachId, coachName: coach.name, qty, amount, rate, expiryDate: expiryDate || null, addedBy: actorTag, passType: passType || null }, ...prev]);
+    setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: date || formatDate(new Date()), coachId, coachName: coach.name, qty, amount, rate, expiryDate: expiryDate || null, addedBy: actorTag, passType: passType || null }, ...prev]);
     showToast(`已為 ${coach.name} 增加 ${qty} 小時${passType ? `（${passType === "personal" ? "個人證" : "彈性證"}）` : ""}（$${amount}）${expiryDate ? `，失效日：${expiryDate}` : ""}`);
-  };
-
-  // 開一張共享訓練通行證：硬性2位教練，30小時／12個月，兩位教練其中一位或admin都可以之後幫佢加值（見addSharedPassHours）
-  const createSharedPass = (coachIdA, coachIdB, date) => {
-    if (coachIdA === coachIdB) { showToast("要揀兩位唔同嘅教練", "error"); return; }
-    const id = "sp" + Date.now() + "-" + Math.random().toString(36).slice(2);
-    const purchaseDate = date || formatDate(new Date());
-    setSharedPasses((prev) => [{
-      id, totalHours: SHARED_PASS_HOURS, usedHours: 0, purchaseDate,
-      expiryDate: addMonthsToDate(purchaseDate, SHARED_PASS_MONTHS),
-      coachIds: [coachIdA, coachIdB], usageByCoach: { [coachIdA]: 0, [coachIdB]: 0 },
-    }, ...prev]);
-    showToast(`已開共享 Pass（${getCoach(coachIdA)?.name} ＋ ${getCoach(coachIdB)?.name}，${SHARED_PASS_HOURS}小時）`);
-  };
-  // 幫一張共享 Pass 加時數：兩位當事教練其中一位，或者 admin，都可以做
-  const addSharedPassHours = (sharedId, qty) => {
-    setSharedPasses((prev) => prev.map((sp) => sp.id === sharedId ? { ...sp, totalHours: (sp.totalHours || 0) + qty } : sp));
-    showToast(`已為共享 Pass 增加 ${qty} 小時`);
-  };
-  // 直接修改共享Pass嘅總時數／到期日（同「+加值」唔同：+加值淨係加，呢個可以set任何數值，包括改細）
-  const updateSharedPass = (id, totalHours, expiryDate) => {
-    setSharedPasses((prev) => prev.map((sp) => sp.id === id ? { ...sp, totalHours, expiryDate } : sp));
-    showToast("已更新共享 Pass");
-  };
-  const deleteSharedPass = (id) => {
-    setSharedPasses((prev) => prev.filter((sp) => sp.id !== id));
-    showToast("已刪除共享 Pass");
   };
 
   // FIFO：將某教練嘅 used 時數，依購買時間順序分配到每筆購買記錄，計出每筆嘅「已用／剩餘」
@@ -942,19 +919,16 @@ export default function App() {
   // 呢位教練喺 passUsageLog 入面，用咗幾多「個人證」時數（只有教練自己 book 堂先會計入呢個 log）
   const personalConsumed = (coachId) => passUsageLog.filter((r) => r.coachId === coachId && r.passType === "personal").reduce((s, r) => s + r.hours, 0);
   const personalRemaining = (coachId) => Math.max(0, personalPurchased(coachId) - personalConsumed(coachId));
-  // 「彈性／舊制」呢個唔限類型嘅池：總剩餘（credits-used）減去「個人證」嗰截，即係solo/duo/包場都用得嘅部分
+  // 「彈性證」呢個唔限類型嘅池：總剩餘（credits-used）減去「個人證」嗰截，即係solo/duo/包場都用得嘅部分
   const flexibleRemaining = (coachId) => {
     const c = getCoach(coachId);
     if (!c) return 0;
     const total = (c.credits || 0) - (c.used || 0);
     return Math.max(0, total - personalRemaining(coachId));
   };
-  // 呢位教練有份嘅共享 Pass（可能有0張、1張，硬性上限2位教練/張）
-  const sharedPassesOf = (coachId) => sharedPasses.filter((sp) => (sp.coachIds || []).includes(coachId));
-  const sharedRemaining = (sp) => Math.max(0, (sp.totalHours || 0) - (sp.usedHours || 0));
 
   // 教練自己 book solo/duo 堂：計算收費同扣邊個池，$100/小時計，1對2 額外多扣0.5小時
-  // 回傳 { ok, price, deductions:[{pool,amount}], error }，pool: "personal" | "flexible" | "shared"
+  // 回傳 { ok, price, deductions:[{pool,amount}], error }，pool: "personal" | "flexible"
   const allocatePassHours = (coachId, sessionType, hours) => {
     const need = sessionType === "duo" ? hours + 0.5 : hours;
     const price = need * 100;
@@ -964,31 +938,22 @@ export default function App() {
     }
     const fRemain = flexibleRemaining(coachId);
     if (fRemain >= need) return { ok: true, price, need, deductions: [{ pool: "flexible", amount: need }] };
-    // 自己個人／彈性池都唔夠：試吓有冇共享 Pass 夠用（最後手段，優先用自己嘅時數）
-    const shared = sharedPassesOf(coachId).find((sp) => sharedRemaining(sp) >= need);
-    if (shared) return { ok: true, price, need, deductions: [{ pool: "shared", sharedId: shared.id, amount: need }] };
     return { ok: false, error: `Pass 時數不足（需要 ${need} 小時），請聯絡 admin 增購` };
   };
 
-  // 實際執行 Pass 扣鐘：personal/flexible 池會記落 passUsageLog + 扣 coach.used（同舊制credits/used共用同一組數字）；
-  // shared 池完全獨立，唔會掂 coach.credits/used，淨係扣返嗰張共享 Pass 自己嘅 usedHours/usageByCoach
+  // 實際執行 Pass 扣鐘：personal/flexible 池會記落 passUsageLog + 扣 coach.used（同舊制credits/used共用同一組數字）
   const commitPassDeduction = (coachId, sessionType, deductions) => {
-    const nonShared = deductions.filter((d) => d.pool !== "shared").reduce((s, d) => s + d.amount, 0);
-    if (nonShared > 0) {
-      setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: c.used + nonShared } : c));
+    const total = deductions.reduce((s, d) => s + d.amount, 0);
+    if (total > 0) {
+      setCoaches((prev) => prev.map((c) => c.id === coachId ? { ...c, used: c.used + total } : c));
       setPassUsageLog((prev) => [
-        ...deductions.filter((d) => d.pool !== "shared").map((d) => ({
+        ...deductions.map((d) => ({
           id: d.id || ("pu" + Date.now() + "-" + Math.random().toString(36).slice(2)),
           coachId, date: formatDate(new Date()), hours: d.amount, passType: d.pool, sessionType,
         })),
         ...prev,
       ]);
     }
-    deductions.filter((d) => d.pool === "shared").forEach((d) => {
-      setSharedPasses((prev) => prev.map((sp) => sp.id === d.sharedId
-        ? { ...sp, usedHours: (sp.usedHours || 0) + d.amount, usageByCoach: { ...(sp.usageByCoach || {}), [coachId]: ((sp.usageByCoach || {})[coachId] || 0) + d.amount } }
-        : sp));
-    });
   };
 
   // sanitize sheet names (Excel: <=31 chars, no : \ / ? * [ ])
@@ -1196,7 +1161,7 @@ export default function App() {
       logRows.sort((a, b) => `${b.日期}${b.開始}`.localeCompare(`${a.日期}${a.開始}`));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(logRows.length ? logRows : [{ 學生: "", 日期: "", 開始: "", 時長小時: "", 類型: "", 收費: "" }]), "學生上課紀錄");
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = formatDate(new Date());
       const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
       const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const url = URL.createObjectURL(blob);
@@ -1261,7 +1226,7 @@ export default function App() {
       const cxRows = cancelLog.map((r) => ({ 原定日期: r.date, 開始: r.start, 時長小時: r.hours, 類型: r.type === "charter" ? rentalFull(r.charterType) : r.type === "duo" ? "一對二" : "一對一", 教練: r.coachName || "", 收費: r.price || 0, 取消方式: actorLabel(r.cancelledBy), 取消時間: r.cancelledAt || "" }));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cxRows.length ? cxRows : [{ 原定日期: "", 開始: "", 時長小時: "", 類型: "", 教練: "", 收費: "", 取消方式: "", 取消時間: "" }]), "取消記錄");
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = formatDate(new Date());
       const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
       const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const url = URL.createObjectURL(blob);
@@ -1437,6 +1402,24 @@ export default function App() {
         {adminTab === "overview" && (
           <div style={S.container}>
             {(() => {
+              const unreadDrinks = drinkSalesLog.filter((s) => !s.read);
+              if (unreadDrinks.length === 0) return null;
+              return (
+                <div style={{ ...S.noticeBanner, marginBottom: 14 }}>
+                  <div style={{ ...S.flexBetween, marginBottom: unreadDrinks.length > 0 ? 6 : 0 }}>
+                    <span>🥤 新飲品訂單（{unreadDrinks.length}）</span>
+                    <button style={S.linkBtn} onClick={() => setDrinkSalesLog((prev) => prev.map((s) => ({ ...s, read: true })))}>知道了</button>
+                  </div>
+                  {unreadDrinks.slice(0, 5).map((s) => (
+                    <div key={s.id} style={{ fontSize: 12, color: "#ccc", marginTop: 2 }}>
+                      {s.coachName} · {s.items.map((it) => `${it.name}×${it.qty}`).join("、")} · ${s.amount} · {s.time}
+                    </div>
+                  ))}
+                  {unreadDrinks.length > 5 && <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>...仲有 {unreadDrinks.length - 5} 張</div>}
+                </div>
+              );
+            })()}
+            {(() => {
               const todayStr = formatDate(new Date());
               const isToday = overviewDate === todayStr;
               const todaysList = [];
@@ -1495,6 +1478,17 @@ export default function App() {
               <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月總收入" : `${viewMonth} 收入`}</div><div style={S.kpiBig}>${monthRevenue.toLocaleString()}</div></div>
               <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已用時數" : "已用時數"}</div><div style={S.kpiBig}>{monthUsed}</div></div>
               <div style={S.kpiCard}><div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月已購時數" : "已購時數"}</div><div style={S.kpiBig}>{monthSold}</div></div>
+              {(() => {
+                const monthDrinks = drinkSalesLog.filter((s) => monthKey(s.date) === viewMonth);
+                const drinkAmount = monthDrinks.reduce((sum, s) => sum + s.amount, 0);
+                const drinkQty = monthDrinks.reduce((sum, s) => sum + s.items.reduce((a, it) => a + it.qty, 0), 0);
+                return (
+                  <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => { setAdminTab("records"); setRecordsView("drinks"); }}>
+                    <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月飲品銷售" : "飲品銷售"}</div>
+                    <div style={S.kpiBig}>${drinkAmount.toLocaleString()}（{drinkQty}支）</div>
+                  </div>
+                );
+              })()}
             </div>
             <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}　｜　累計已用時數 {totalUsed}　｜　累計已購時數 {totalSold}</p>
 
@@ -1726,33 +1720,15 @@ export default function App() {
                       const done = ["payment", "welcome", "rental", "terms"].filter((k) => os[k]).length;
                       return done > 0 && done < 4 ? <div style={{ fontSize: 11, color: "#FFB347" }}>Onboarding {done}/4</div> : done === 4 ? <div style={{ fontSize: 11, color: "#6BCB77" }}>Onboarding 完成 ✓</div> : null;
                     })()}
-                    {sharedPassesOf(c.id).map((sp) => {
-                      const other = (sp.coachIds || []).find((id) => id !== c.id);
-                      const remain = sharedRemaining(sp);
-                      return (
-                        <div key={sp.id} style={{ fontSize: 12, color: remain > 0 ? "#4ECDC4" : "#555", marginTop: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <span>🔗 共享Pass（同 {getCoach(other)?.name || "?"}）剩 {remain}/{sp.totalHours} 小時</span>
-                          <button style={S.linkBtn} onClick={() => setSharedTopUpModal({ sharedId: sp.id, qty: 5 })}>+加值</button>
-                          <button style={S.linkBtn} onClick={() => setEditSharedPassModal({ id: sp.id, totalHours: sp.totalHours, expiryDate: sp.expiryDate || "" })}>編輯</button>
-                          <button style={S.linkBtn} onClick={() => setDelSharedPassModal(sp)}>刪除</button>
-                        </div>
-                      );
-                    })}
                   </div>
                   <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 時數</button>
                   <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00", hours: 1 })}>⚠️ 提醒補book</button>
+                  <button style={S.smallBtn} onClick={() => setAdjustUsedModal({ coachId: c.id, used: c.used, note: "" })}>🔧 調整已用時數</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
                 </div>
               ))}
             </div>
-
-            <div style={{ ...S.flexBetween, marginTop: 24 }}>
-              <h2 style={{ ...S.sectionTitle, marginBottom: 0 }}>共享訓練通行證</h2>
-              <button style={S.addBtn} disabled={coaches.length < 2} onClick={() => setSharedPassModal({ coachIdA: coaches[0]?.id, coachIdB: coaches[1]?.id, date: formatDate(new Date()) })}>+ 開共享 Pass</button>
-            </div>
-            {coaches.length < 2 && <p style={S.assistHint}>要至少2位教練先可以開共享 Pass。</p>}
-            <p style={S.assistHint}>※ 已開嘅共享 Pass，會直接顯示喺對應兩位教練嘅卡上面（見上方教練帳戶列表）。</p>
           </div>
         )}
 
@@ -1807,6 +1783,7 @@ export default function App() {
             <div style={S.segRow}>
               <button style={recordsView === "bookings" ? S.segActive : S.seg} onClick={() => setRecordsView("bookings")}>上堂記錄</button>
               <button style={recordsView === "cancelled" ? S.segActive : S.seg} onClick={() => setRecordsView("cancelled")}>取消記錄 {cancelLog.length > 0 && <span style={S.badge}>{cancelLog.length}</span>}</button>
+              <button style={recordsView === "drinks" ? S.segActive : S.seg} onClick={() => setRecordsView("drinks")}>飲品記錄</button>
             </div>
 
             {recordsView === "bookings" ? (() => {
@@ -1888,7 +1865,7 @@ export default function App() {
                 <p style={S.assistHint}>※ 撳記錄可展開詳情；管理員可協助取消任何時段（包括未開始、24小時內、甚至已完成嘅堂）。</p>
               </>
               );
-            })() : (
+            })() : recordsView === "cancelled" ? (
               <>
                 <div style={{ ...S.bookingList, marginTop: 16 }}>
                   {cancelLog.length === 0 ? <p style={S.emptyText}>暫無取消記錄</p> : cancelLog.map((r, i) => (
@@ -1908,6 +1885,26 @@ export default function App() {
                 </div>
                 <p style={S.assistHint}>※ 留底紀錄，方便日後查核某時段點解空出，唔可以還原。</p>
               </>
+            ) : (
+              <>
+                <div style={{ ...S.bookingList, marginTop: 16 }}>
+                  {drinkSalesLog.length === 0 ? <p style={S.emptyText}>暫無飲品銷售記錄</p> : drinkSalesLog.map((s) => (
+                    <div key={s.id} style={S.bookingItem}>
+                      <div style={{ ...S.dot, background: "#4ECDC4" }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={S.bookingCoach}>{s.coachName} <span style={S.soloTag}>${s.amount}</span></div>
+                        <div style={S.bookingTime}>{s.items.map((it) => `${it.name}×${it.qty}`).join("、")}</div>
+                        <div style={S.bookingTime}>{s.date} {s.time}{s.read === false ? "　🔴 未讀" : ""}</div>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <button style={S.smallBtn} onClick={() => setEditDrinkSaleModal({ id: s.id, items: s.items.map((it) => ({ ...it })) })}>編輯</button>
+                        <button style={S.delBtn} onClick={() => setDelDrinkSaleModal(s)}>剷除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p style={S.assistHint}>※ 呢度純粹記錄「話咗轉數」，系統唔會自動核實款項有冇真係入到。</p>
+              </>
             )}
           </div>
         )}
@@ -1922,7 +1919,38 @@ export default function App() {
                 ))}
               </div>
             )}
-            <h2 id="set-password" style={S.sectionTitle}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
+            {currentUser.role === "admin" && (
+              <>
+                <h2 id="set-drinks" style={S.sectionTitle}>飲品產品管理</h2>
+                <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「其他」分頁可以幫學生落單，撳掣顯示上面嘅收款QR。呢度管理有邊啲產品同價錢。</p>
+                  {drinkProducts.length === 0 ? (
+                    <p style={S.emptyText}>仲未上架任何產品</p>
+                  ) : (
+                    <div style={{ marginBottom: 14 }}>
+                      {drinkProducts.map((p) => (
+                        <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px solid #222" }}>
+                          <input style={{ ...S.input, flex: 2 }} value={p.name} onChange={(e) => updateDrinkProduct(p.id, "name", e.target.value)} />
+                          <div style={{ display: "flex", alignItems: "center", flex: 1 }}>
+                            <span style={{ marginRight: 4 }}>$</span>
+                            <input style={S.input} type="number" min="0" value={p.price} onChange={(e) => updateDrinkProduct(p.id, "price", Number(e.target.value) || 0)} />
+                          </div>
+                          <button style={S.smallBtn} onClick={() => removeDrinkProduct(p.id)}>刪除</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <label style={S.label}>新增產品</label>
+                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    <input style={{ ...S.input, flex: 2 }} placeholder="產品名（例如：樽裝水）" value={newDrinkForm.name} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, name: e.target.value })} />
+                    <input style={{ ...S.input, flex: 1 }} type="number" min="0" placeholder="$" value={newDrinkForm.price} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, price: e.target.value })} />
+                  </div>
+                  <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addDrinkProduct}>新增</button>
+                </div>
+
+              </>
+            )}
+            <h2 id="set-password" style={{ ...S.sectionTitle, marginTop: 28 }}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
             <div style={S.formCard}>
               <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
               <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
@@ -1958,33 +1986,6 @@ export default function App() {
                     <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleQRUpload(e.target.files?.[0])} />
                   </label>
                   {paymentQR && <button style={{ ...S.smallBtn, width: "100%", marginTop: 8 }} onClick={() => setPaymentQR("")}>移除</button>}
-                </div>
-
-                <h2 id="set-drinks" style={{ ...S.sectionTitle, marginTop: 28 }}>飲品產品管理</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「其他」分頁可以幫學生落單，撳掣顯示上面嘅收款QR。呢度管理有邊啲產品同價錢。</p>
-                  {drinkProducts.length === 0 ? (
-                    <p style={S.emptyText}>仲未上架任何產品</p>
-                  ) : (
-                    <div style={{ marginBottom: 14 }}>
-                      {drinkProducts.map((p) => (
-                        <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px solid #222" }}>
-                          <input style={{ ...S.input, flex: 2 }} value={p.name} onChange={(e) => updateDrinkProduct(p.id, "name", e.target.value)} />
-                          <div style={{ display: "flex", alignItems: "center", flex: 1 }}>
-                            <span style={{ marginRight: 4 }}>$</span>
-                            <input style={S.input} type="number" min="0" value={p.price} onChange={(e) => updateDrinkProduct(p.id, "price", Number(e.target.value) || 0)} />
-                          </div>
-                          <button style={S.smallBtn} onClick={() => removeDrinkProduct(p.id)}>刪除</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <label style={S.label}>新增產品</label>
-                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                    <input style={{ ...S.input, flex: 2 }} placeholder="產品名（例如：樽裝水）" value={newDrinkForm.name} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, name: e.target.value })} />
-                    <input style={{ ...S.input, flex: 1 }} type="number" min="0" placeholder="$" value={newDrinkForm.price} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, price: e.target.value })} />
-                  </div>
-                  <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addDrinkProduct}>新增</button>
                 </div>
 
                 <h2 id="set-calendar" style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
@@ -2130,7 +2131,7 @@ export default function App() {
                 const color = coachColorFromId(newId);
                 const initials = clean.name.trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "NA";
                 setCoaches((prev) => [...prev, { ...clean, id: newId, color, initials, used: 0 }]);
-                if (clean.credits > 0) setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: new Date().toISOString().slice(0, 10), coachId: newId, coachName: clean.name, qty: clean.credits, amount: clean.credits * clean.rate, rate: clean.rate, addedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin" }, ...prev]);
+                if (clean.credits > 0) setPurchaseLog((prev) => [{ id: "p" + Date.now() + "-" + Math.random().toString(36).slice(2), date: formatDate(new Date()), coachId: newId, coachName: clean.name, qty: clean.credits, amount: clean.credits * clean.rate, rate: clean.rate, addedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin" }, ...prev]);
                 showToast(`已新增教練 ${clean.name}（@${uname}）`);
               }
               setEditCoach(null);
@@ -2172,6 +2173,26 @@ export default function App() {
             </div>
           </div></div>
         )}
+
+        {adjustUsedModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>手動調整已用時數</h3>
+            <p style={S.modalText}>{getCoach(adjustUsedModal.coachId)?.name}　現時總購買 {getCoach(adjustUsedModal.coachId)?.credits} 小時</p>
+            <Field label="已用時數（直接set做正確數值）"><input style={S.input} type="number" step="0.5" min="0" value={adjustUsedModal.used} onChange={(e) => setAdjustUsedModal({ ...adjustUsedModal, used: e.target.value })} /></Field>
+            <Field label="備註（方便日後追溯，例如「修正duo退款誤差」）"><input style={S.input} value={adjustUsedModal.note} onChange={(e) => setAdjustUsedModal({ ...adjustUsedModal, note: e.target.value })} /></Field>
+            <p style={S.assistHint}>⚠️ 呢個工具直接改寫 used 數值，唔會經過正常book/取消流程，用嚟修正歷史誤差先用。每次調整都會留底（教練/日期/舊值→新值/備註）。</p>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setAdjustUsedModal(null)}>取消</button>
+              <button style={S.modalConfirm} onClick={() => {
+                const used = Number(adjustUsedModal.used);
+                if (isNaN(used) || used < 0) { showToast("請輸入有效數值", "error"); return; }
+                adjustCoachUsed(adjustUsedModal.coachId, used, adjustUsedModal.note);
+                setAdjustUsedModal(null);
+              }}>確認調整</button>
+            </div>
+          </div></div>
+        )}
+
 
         {editDateRec && (
           <div style={S.modalOverlay}><div style={S.modal}>
@@ -2540,30 +2561,38 @@ export default function App() {
 
             if (todayBookings.length > 0) {
               // 揀「最近一堂」：優先揀仲未完嘅（結束時間 >= 而家），冇就揀最後一堂（全部已完成）
+              // 呢個揀法本身已經會自動update：例如1700-1800、1800-1900兩堂，一過咗18:00，第一堂結束時間<而家，自動跳去揀第二堂
               const upcoming = todayBookings.find((b) => toMin(b.start) + b.hours * 60 >= nowMin);
               const featured = upcoming || todayBookings[todayBookings.length - 1];
               const end = addMinutes(featured.start, featured.hours * 60);
+              const others = todayBookings.filter((b) => b.start !== featured.start);
               return (
                 <div style={{ ...S.reminderCard, ...S.reminderCardConfirmed }}>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888", marginBottom: 8 }}>
                     <span>今日場地使用</span>
                     {todayBookings.length > 1 && <span>今日共 {todayBookings.length} 堂</span>}
                   </div>
-                  <div style={S.reminderStatusRow}>
-                    <div style={S.reminderIconOk}>✓</div>
-                    <div style={{ fontWeight: 700, color: "#4ECDC4" }}>{todayBookings.length > 1 ? "最近一堂" : "已預約"}</div>
-                  </div>
-                  <div style={{ marginLeft: 28, marginTop: 4 }}>
-                    <div style={{ fontSize: 18, fontWeight: 700 }}>{featured.start} – {end}</div>
-                    <div style={{ fontSize: 12, color: "#888" }}>{featured.type === "duo" ? "1對2" : "1對1"}{featured.students?.length ? " · " + featured.students.join("、") : ""}</div>
-                  </div>
-                  {todayBookings.length > 1 && (
-                    <div style={S.reminderChipWrap}>
-                      {todayBookings.map((b) => (
-                        <span key={`${b.date}_${b.start}`} style={S.reminderChip}>{b.start}{b.start === featured.start ? " ← 最近" : ""}</span>
-                      ))}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={S.reminderStatusRow}>
+                        <div style={S.reminderIconOk}>✓</div>
+                        <div style={{ fontWeight: 700, color: "#4ECDC4" }}>{todayBookings.length > 1 ? "最近一堂" : "已預約"}</div>
+                      </div>
+                      <div style={{ marginLeft: 28, marginTop: 4 }}>
+                        <div style={{ fontSize: 18, fontWeight: 700 }}>{featured.start} – {end}</div>
+                        <div style={{ fontSize: 12, color: "#888" }}>{featured.type === "duo" ? "1對2" : "1對1"}{featured.students?.length ? " · " + featured.students.join("、") : ""}</div>
+                      </div>
                     </div>
-                  )}
+                    {others.length > 0 && (
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        {others.map((b) => (
+                          <div key={`${b.date}_${b.start}`} style={{ fontSize: 11, color: "#888", marginBottom: 3 }}>
+                            {b.start}　{b.students?.length ? b.students.join("、") : (b.type === "duo" ? "1對2" : "1對1")}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             }
@@ -2765,25 +2794,16 @@ export default function App() {
             );
           })()}
           {(() => {
-            // 第9項：我的 Pass 資訊panel——個人/彈性/共享 breakdown，共享嗰張可以自己加值
+            // 第9項：我的 Pass 資訊panel——個人/彈性 breakdown
             const pRemain2 = personalRemaining(currentUser.id);
             const fRemain2 = flexibleRemaining(currentUser.id);
-            const myShared = sharedPassesOf(currentUser.id);
-            const hasAnyPass = pRemain2 > 0 || fRemain2 > 0 || myShared.length > 0 || purchaseLog.some((r) => r.coachId === currentUser.id && r.passType);
+            const hasAnyPass = pRemain2 > 0 || fRemain2 > 0 || purchaseLog.some((r) => r.coachId === currentUser.id && r.passType);
             if (!hasAnyPass) return null;
             return (
               <div style={{ ...S.formCard, marginBottom: 14 }}>
                 <div style={{ ...S.assistHint, marginBottom: 6 }}>我的 Training Pass</div>
                 {pRemain2 > 0 && <div style={S.bookingTime}>個人證（solo限定）剩 {pRemain2} 小時</div>}
                 {fRemain2 > 0 && <div style={S.bookingTime}>彈性證剩 {fRemain2} 小時</div>}
-                {myShared.map((sp) => {
-                  const other = (sp.coachIds || []).find((id) => id !== currentUser.id);
-                  return (
-                    <div key={sp.id} style={{ ...S.flexBetween, marginTop: 4 }}>
-                      <span style={S.bookingTime}>共享 Pass（同 {getCoach(other)?.name || "?"}）剩 {sharedRemaining(sp)} / {sp.totalHours} 小時</span>
-                    </div>
-                  );
-                })}
               </div>
             );
           })()}
@@ -3100,7 +3120,39 @@ export default function App() {
 
       {view === "other" && (
         <div style={S.container}>
-          <h2 style={S.sectionTitle}>匿名改善建議</h2>
+          <h2 style={S.sectionTitle}>🥤 飲品訂購</h2>
+          <div style={S.formCard}>
+            {drinkProducts.length === 0 ? (
+              <p style={S.emptyText}>Admin 仲未上架任何飲品</p>
+            ) : (
+              <>
+                <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                  {drinkProducts.map((p) => {
+                    const qty = Number(drinkCart[p.id]) || 0;
+                    return (
+                      <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222" }}>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{p.name}</div>
+                          <div style={S.assistHint}>${p.price} / 支</div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <button style={S.smallBtn} onClick={() => setDrinkCart((c) => ({ ...c, [p.id]: Math.max(0, qty - 1) }))}>－</button>
+                          <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
+                          <button style={S.smallBtn} onClick={() => setDrinkCart((c) => ({ ...c, [p.id]: qty + 1 }))}>＋</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, fontWeight: 700 }}>
+                  <span>合共</span><span>${drinkCartTotal()}</span>
+                </div>
+                <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={openDrinkCheckout}>下一步：顯示收款 QR</button>
+              </>
+            )}
+          </div>
+
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議</h2>
           <div style={S.noticeBanner}>
             🔒 呢個意見箱<strong>完全匿名</strong>。
           </div>
@@ -3110,43 +3162,6 @@ export default function App() {
                 onChange={(e) => setSuggestionText(e.target.value)} placeholder="想提啲咩改善建議？" />
             </Field>
             <button style={S.loginBtn} onClick={() => { submitSuggestion(suggestionText); setSuggestionText(""); }}>匿名提交</button>
-          </div>
-
-          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>🥤 飲品訂購</h2>
-          <div style={S.formCard}>
-            <button style={{ ...S.smallBtn, width: "100%", textAlign: "center" }} onClick={() => setDrinkOrderOpen((o) => !o)}>
-              {drinkOrderOpen ? "▲ 收埋" : "▼ 打開飲品清單"}{drinkCartCount() > 0 ? `（已揀 ${drinkCartCount()} 支）` : ""}
-            </button>
-            {drinkOrderOpen && (
-              drinkProducts.length === 0 ? (
-                <p style={{ ...S.emptyText, marginTop: 12 }}>Admin 仲未上架任何飲品</p>
-              ) : (
-                <>
-                  <div style={{ maxHeight: 320, overflowY: "auto", marginTop: 12 }}>
-                    {drinkProducts.map((p) => {
-                      const qty = Number(drinkCart[p.id]) || 0;
-                      return (
-                        <div key={p.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222" }}>
-                          <div>
-                            <div style={{ fontWeight: 600 }}>{p.name}</div>
-                            <div style={S.assistHint}>${p.price} / 支</div>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <button style={S.smallBtn} onClick={() => setDrinkCart((c) => ({ ...c, [p.id]: Math.max(0, qty - 1) }))}>－</button>
-                            <span style={{ minWidth: 20, textAlign: "center" }}>{qty}</span>
-                            <button style={S.smallBtn} onClick={() => setDrinkCart((c) => ({ ...c, [p.id]: qty + 1 }))}>＋</button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, fontWeight: 700 }}>
-                    <span>合共</span><span>${drinkCartTotal()}</span>
-                  </div>
-                  <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={openDrinkCheckout}>下一步：顯示收款 QR</button>
-                </>
-              )
-            )}
           </div>
 
           <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>修改我的密碼</h2>
@@ -3215,12 +3230,55 @@ export default function App() {
           <p style={S.assistHint}>請畀學生掃碼自行轉數（用學生自己部電話嘅銀行 App），系統唔會自動核實款項有冇入到。</p>
           <div style={S.modalBtns}>
             <button style={S.modalCancel} onClick={() => setDrinkQrModal(null)}>取消</button>
-            <button style={S.modalConfirm} onClick={confirmDrinkSale}>已顯示，記錄呢單</button>
+            <button style={S.modalConfirm} onClick={confirmDrinkSale}>已過數，發送記錄</button>
           </div>
         </div></div>
       )}
 
-      {bookModal && (() => {
+      {editDrinkSaleModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>修改飲品訂單</h3>
+          {editDrinkSaleModal.items.map((it, idx) => (
+            <div key={it.productId} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <span style={{ flex: 1 }}>{it.name}（${it.price}/支）</span>
+              <button style={S.smallBtn} onClick={() => {
+                const items = [...editDrinkSaleModal.items];
+                items[idx] = { ...items[idx], qty: Math.max(0, items[idx].qty - 1) };
+                setEditDrinkSaleModal({ ...editDrinkSaleModal, items });
+              }}>－</button>
+              <span style={{ minWidth: 20, textAlign: "center" }}>{it.qty}</span>
+              <button style={S.smallBtn} onClick={() => {
+                const items = [...editDrinkSaleModal.items];
+                items[idx] = { ...items[idx], qty: items[idx].qty + 1 };
+                setEditDrinkSaleModal({ ...editDrinkSaleModal, items });
+              }}>＋</button>
+            </div>
+          ))}
+          <p style={S.amountPreview}>新金額：${editDrinkSaleModal.items.reduce((s, it) => s + it.price * it.qty, 0)}</p>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setEditDrinkSaleModal(null)}>取消</button>
+            <button style={S.modalConfirm} onClick={() => {
+              const items = editDrinkSaleModal.items.filter((it) => it.qty > 0);
+              if (items.length === 0) { showToast("最少要留低一款有數量嘅產品", "error"); return; }
+              updateDrinkSale(editDrinkSaleModal.id, items);
+              setEditDrinkSaleModal(null);
+            }}>儲存</button>
+          </div>
+        </div></div>
+      )}
+      {delDrinkSaleModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>剷除飲品訂單</h3>
+          <p style={S.modalText}>{delDrinkSaleModal.coachName}　{delDrinkSaleModal.items.map((it) => `${it.name}×${it.qty}`).join("、")}　${delDrinkSaleModal.amount}</p>
+          <p style={S.modalText}>確定剷除？此動作無法復原。</p>
+          <div style={S.modalBtns}>
+            <button style={S.modalCancel} onClick={() => setDelDrinkSaleModal(null)}>取消</button>
+            <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => { deleteDrinkSale(delDrinkSaleModal.id); setDelDrinkSaleModal(null); }}>確認剷除</button>
+          </div>
+        </div></div>
+      )}
+
+
         const isDuo = bookModal.sessionType === "duo";
         const isFilming = bookModal.sessionType === "filming";
         const passCost = isDuo ? bookModal.hours + 0.5 : bookModal.hours;
@@ -3232,8 +3290,7 @@ export default function App() {
         const fRemain = flexibleRemaining(currentUser.id);
         const poolLabel = !isFilming ? (
           bookModal.sessionType === "solo" && pRemain >= passCost ? "個人證" :
-          fRemain >= passCost ? "彈性證" :
-          sharedPassesOf(currentUser.id).some((sp) => sharedRemaining(sp) >= passCost) ? "共享 Pass" : "時數不足"
+          fRemain >= passCost ? "彈性證" : "時數不足"
         ) : "";
         return (
           <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
@@ -3332,61 +3389,6 @@ export default function App() {
           <div style={S.modalBtns}>
             <button style={S.modalCancel} onClick={() => setAddStudentCreditModal(null)}>取消</button>
             <button style={S.modalConfirm} onClick={() => { const qty = Number(addStudentCreditModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效堂數", "error"); return; } addStudentCredits(addStudentCreditModal.name, qty, addStudentCreditModal.date, addStudentCreditModal.expiryDate); setAddStudentCreditModal(null); }}>確認增加</button>
-          </div>
-        </div></div>
-      )}
-      {sharedPassModal && (
-        <div style={S.modalOverlay}><div style={S.modal}>
-          <h3 style={S.modalTitle}>開共享訓練通行證</h3>
-          <p style={S.assistHint}>{SHARED_PASS_HOURS}小時／{SHARED_PASS_MONTHS}個月，硬性限制2位教練，任何一位或 admin 都可以之後幫呢張 Pass 加值。</p>
-          <label style={S.label}>教練 A</label>
-          <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={sharedPassModal.coachIdA} onChange={(e) => setSharedPassModal({ ...sharedPassModal, coachIdA: Number(e.target.value) })}>
-            {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <label style={{ ...S.label, marginTop: 10 }}>教練 B</label>
-          <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={sharedPassModal.coachIdB} onChange={(e) => setSharedPassModal({ ...sharedPassModal, coachIdB: Number(e.target.value) })}>
-            {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <Field label="開始日期"><input style={S.input} type="date" value={sharedPassModal.date || formatDate(new Date())} onChange={(e) => setSharedPassModal({ ...sharedPassModal, date: e.target.value })} /></Field>
-          <div style={S.modalBtns}>
-            <button style={S.modalCancel} onClick={() => setSharedPassModal(null)}>取消</button>
-            <button style={S.modalConfirm} onClick={() => { createSharedPass(sharedPassModal.coachIdA, sharedPassModal.coachIdB, sharedPassModal.date); setSharedPassModal(null); }}>確認開卡</button>
-          </div>
-        </div></div>
-      )}
-      {sharedTopUpModal && (
-        <div style={S.modalOverlay}><div style={S.modal}>
-          <h3 style={S.modalTitle}>幫共享 Pass 加值</h3>
-          <Field label="加幾多小時"><input style={S.input} type="number" step="0.5" min="0.5" value={sharedTopUpModal.qty} onChange={(e) => setSharedTopUpModal({ ...sharedTopUpModal, qty: e.target.value })} /></Field>
-          <div style={S.modalBtns}>
-            <button style={S.modalCancel} onClick={() => setSharedTopUpModal(null)}>取消</button>
-            <button style={S.modalConfirm} onClick={() => { const qty = Number(sharedTopUpModal.qty) || 0; if (qty <= 0) { showToast("請輸入有效小時數", "error"); return; } addSharedPassHours(sharedTopUpModal.sharedId, qty); setSharedTopUpModal(null); }}>確認加值</button>
-          </div>
-        </div></div>
-      )}
-      {editSharedPassModal && (
-        <div style={S.modalOverlay}><div style={S.modal}>
-          <h3 style={S.modalTitle}>修改共享 Pass</h3>
-          <Field label="總時數（小時）"><input style={S.input} type="number" step="0.5" min="0" value={editSharedPassModal.totalHours} onChange={(e) => setEditSharedPassModal({ ...editSharedPassModal, totalHours: e.target.value })} /></Field>
-          <Field label="到期日"><input style={S.input} type="date" value={editSharedPassModal.expiryDate} onChange={(e) => setEditSharedPassModal({ ...editSharedPassModal, expiryDate: e.target.value })} /></Field>
-          <div style={S.modalBtns}>
-            <button style={S.modalCancel} onClick={() => setEditSharedPassModal(null)}>取消</button>
-            <button style={S.modalConfirm} onClick={() => {
-              const totalHours = Number(editSharedPassModal.totalHours) || 0;
-              if (totalHours <= 0) { showToast("請輸入有效小時數", "error"); return; }
-              updateSharedPass(editSharedPassModal.id, totalHours, editSharedPassModal.expiryDate);
-              setEditSharedPassModal(null);
-            }}>儲存</button>
-          </div>
-        </div></div>
-      )}
-      {delSharedPassModal && (
-        <div style={S.modalOverlay}><div style={S.modal}>
-          <h3 style={S.modalTitle}>刪除共享 Pass</h3>
-          <p style={S.modalText}>確定刪除呢張共享 Pass？此動作無法復原，已用嘅時數記錄唔會受影響，但呢張卡本身會消失。</p>
-          <div style={S.modalBtns}>
-            <button style={S.modalCancel} onClick={() => setDelSharedPassModal(null)}>取消</button>
-            <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => { deleteSharedPass(delSharedPassModal.id); setDelSharedPassModal(null); }}>確認刪除</button>
           </div>
         </div></div>
       )}

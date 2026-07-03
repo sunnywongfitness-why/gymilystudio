@@ -108,6 +108,8 @@ export function getDaysOfWeek(offset = 0, mode = "fixed") {
 }
 export const pad2 = (n) => String(n).padStart(2, "0");
 export const formatDate = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+// 「呢一刻」嘅日期時間戳（YYYY-MM-DD HH:MM），用裝置本地時間（唔係toISOString嗰種UTC，唔係唔會慢咗8個鐘）
+export const nowStamp = (date = new Date()) => `${formatDate(date)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 export const addDaysToDate = (dateStr, days) => { const d = new Date(`${dateStr}T00:00:00`); d.setDate(d.getDate() + days); return formatDate(d); };
 export const addMonthsToDate = (dateStr, months) => { const d = new Date(`${dateStr}T00:00:00`); d.setMonth(d.getMonth() + months); return formatDate(d); };
 export const isTodayDate = (date) => formatDate(date) === formatDate(new Date());

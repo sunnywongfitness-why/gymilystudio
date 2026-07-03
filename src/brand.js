@@ -28,8 +28,6 @@ export const PERSONAL_PASS_HOURS = 10; // 個人訓練通行證：時數
 export const PERSONAL_PASS_MONTHS = 6; // 個人訓練通行證：有效期（月）
 export const FLEXIBLE_PASS_HOURS = 15; // 彈性訓練通行證：時數
 export const FLEXIBLE_PASS_MONTHS = 12; // 彈性訓練通行證：有效期（月）
-export const SHARED_PASS_HOURS = 30; // 共享訓練通行證：時數
-export const SHARED_PASS_MONTHS = 12; // 共享訓練通行證：有效期（月）
 export const CLOSED_DAYS = []; // 休息日，例如 [5] = 逢星期五休息。getDay(): 日0 一1 二2 三3 四4 五5 六6
 export const OPEN_HOUR = 7; // 場地開放時間（24小時制）
 export const CLOSE_HOUR = 22; // 場地關閉時間
@@ -154,7 +152,7 @@ export function onboardingTermsText() {
 Training Pass：
 ・不設退款，不可兌換現金
 ・有效期後失效，一般不延期（特殊情況除外）
-・除共享Pass外，不得轉讓
+・不得轉讓
 
 －－－－－－－－－－
 
