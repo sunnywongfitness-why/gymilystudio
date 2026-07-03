@@ -17,7 +17,7 @@ import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
   stableStringify, initialSession, duoPrice, isWholeVenue, rentalShort, rentalFull,
   isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
-  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel, bookedByLabel, nowStamp,
+  hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel, bookedByLabel, nowStamp, closedDayMessage,
 } from "./helpers.js";
 import { S } from "./styles.js";
 import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
@@ -273,7 +273,7 @@ export default function App() {
   };
 
   const openBook = (date, time) => {
-    if (isClosedDay(date)) return showToast("星期四、五休息，不開放預約", "error");
+    if (isClosedDay(date)) return showToast(closedDayMessage() || "今日休息，不開放預約", "error");
     if (soldOut) return showToast("你已用晒購買時數，請聯絡管理員增購", "error");
     const allowSolo = liveUser.allowSolo !== false;
     const allowDuo = liveUser.allowDuo !== false;
@@ -3278,7 +3278,7 @@ export default function App() {
         </div></div>
       )}
 
-
+      {bookModal && (() => {
         const isDuo = bookModal.sessionType === "duo";
         const isFilming = bookModal.sessionType === "filming";
         const passCost = isDuo ? bookModal.hours + 0.5 : bookModal.hours;
