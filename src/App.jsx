@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import * as XLSX from "xlsx";
+// pdf-lib同xlsx改做dynamic import（喺generateInvoicePDF/generateSignatureReportPDF/exportExcel/exportMyIncomeSheet入面用到先載入），
+// 減細首次載入嘅bundle size，唔影響任何功能
 import { cloudEnabled, cloudLoad, cloudSave, cloudSubscribe, SUPABASE_URL } from "./supabase.js";
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import {
   ADMIN_TAB_KEYS, TIME_SLOTS, LS_KEY,
 } from "./constants.js";
@@ -239,11 +239,6 @@ export default function App() {
   const [incomeDetailMonth, setIncomeDetailMonth] = useState(null); // 每月收入卡「睇明細」展開緊邊個月份+邊個類別，例如 "2026-07:purchase"
   const [kpiDetailModal, setKpiDetailModal] = useState(null); // 總覽6張KPI卡撳落去彈嘅明細modal，值："revenue"|"actual"|"charter"|"expected"|"used"|"drinks"
   const [newStudentName, setNewStudentName] = useState("");
-  const [reminderStudentName, setReminderStudentName] = useState("");
-  const [reminderPhone, setReminderPhone] = useState(""); // 唔會persist，跟返「唔保留學生電話」嘅私隱決定，每次手動輸入
-  const [reminderDate, setReminderDate] = useState("");
-  const [reminderTime, setReminderTime] = useState("19:00");
-  const [reminderPreview, setReminderPreview] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
   const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
   const [sigReportModal, setSigReportModal] = useState(null); // {studentName, month}（第2項：學生簽名月度報表）
@@ -576,22 +571,17 @@ export default function App() {
     }
   };
 
-  // ---- 提醒學生上堂（第10項新增）：用返「⑦ 上堂提醒」範本，代入{{學生名}}/{{日期}}/{{時間}}；電話唔會persist，每次手動輸入 ----
-  const fillStudentReminderPreview = (name, date, time) => {
+  // ---- 提醒學生上堂：用返「⑦ 上堂提醒」範本，代入{{學生名}}/{{日期}}/{{時間}}（方案A：直接由booking卡context帶入，唔使手動揀）----
+  // 「我的預約記錄」每張booking卡嘅學生名牌旁邊嗰個📱掣：直接用返呢張卡本身嘅日期時間，唔使再手動揀（2026-07 方案A定案）
+  const sendStudentReminderForBooking = (name, date, start) => {
     const tpl = textTemplates.find((t) => t.id === "tpl-student-reminder") || textTemplates.find((t) => t.name.includes("上堂提醒"));
-    if (!tpl) { setReminderPreview(""); return; }
-    let text = tpl.content.replaceAll("{{學生名}}", name || "");
-    text = text.replaceAll("{{日期}}", date || "");
-    text = text.replaceAll("{{時間}}", time || "");
-    setReminderPreview(text);
-  };
-  const handleSendStudentReminder = () => {
-    if (!reminderStudentName) { showToast("請揀學生", "error"); return; }
-    if (!reminderPreview.trim()) { showToast("內容係空嘅", "error"); return; }
-    if (reminderPhone) {
-      window.open(`https://wa.me/${reminderPhone}?text=${encodeURIComponent(reminderPreview)}`, "_blank");
+    if (!tpl) { showToast("搵唔到「上堂提醒」範本，可以去設定嘅文本範本庫新增", "error"); return; }
+    const s = myRoster.find((x) => x.name === name);
+    const text = tpl.content.replaceAll("{{學生名}}", name).replaceAll("{{日期}}", date).replaceAll("{{時間}}", start);
+    if (s?.phone) {
+      window.open(`https://wa.me/${s.phone}?text=${encodeURIComponent(text)}`, "_blank");
     } else {
-      setCopyInfoModal({ title: `提醒 ${reminderStudentName} 上堂`, text: reminderPreview });
+      setCopyInfoModal({ title: `提醒 ${name} 上堂`, text });
     }
   };
 
@@ -1119,6 +1109,7 @@ export default function App() {
   // 其他全部跟住教練同呢筆購買記錄自動帶入；公司印章自動貼上。
   const generateInvoicePDF = async (record) => {
     try {
+      const { PDFDocument, rgb, StandardFonts } = await import("pdf-lib");
       const teal = rgb(...INVOICE_THEME_RGB);
       const lightBlue = rgb(0.85, 0.91, 0.96);
       const grey = rgb(0.6, 0.6, 0.6);
@@ -1238,6 +1229,7 @@ export default function App() {
         .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
       if (rows.length === 0) { showToast(`${month} 冇 ${studentName} 嘅上堂記錄`, "error"); return; }
 
+      const { PDFDocument, rgb, StandardFonts } = await import("pdf-lib");
       const teal = rgb(...INVOICE_THEME_RGB);
       const black = rgb(0.1, 0.1, 0.1);
       const grey = rgb(0.6, 0.6, 0.6);
@@ -1301,8 +1293,9 @@ export default function App() {
   };
 
 
-  const exportMyIncomeSheet = () => {
+  const exportMyIncomeSheet = async () => {
     try {
+      const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
       const monthRows = myIncomeReport.months.map((m) => ({
         月份: m.month, 計入收入嘅堂數: m.count, 學生收費總額: m.gross, 租場費用: m.rentalCost, 實際收入: m.net,
@@ -1332,8 +1325,9 @@ export default function App() {
     }
   };
 
-  const exportExcel = () => {
+  const exportExcel = async () => {
     try {
+      const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
 
       // 1) 教練總覽
@@ -1431,15 +1425,15 @@ export default function App() {
     });
   });
   myBookings.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
-  // 「距今日最近」排序：未來（包括今日）優先，由近到遠；之後先至到過去嘅日子，由最近至最舊
-  // 修正前 bug：用 Math.abs() 計距離令過去同未來平等，導致已完成嘅過去日子跑咗上最頂
+  // 「距今日最近」排序：未完成嘅（包括今日仲未開始嘅）優先，由近到遠；已完成嘅（開始時間已過）全部擺到最底，由最近至最舊
+  // 修正前 bug：淨係比較日期（唔理時間），令今日已完成嘅堂都當「未來」跑咗上最頂
   const myBookingsSorted = (() => {
     if (myBookingsSortMode !== "closest") return myBookings;
-    const todayMs = new Date(`${formatDate(new Date())}T00:00:00`).getTime();
-    const dayMs = (d) => new Date(`${d}T00:00:00`).getTime();
-    const future = myBookings.filter((b) => dayMs(b.date) >= todayMs).sort((a, b) => dayMs(a.date) - dayMs(b.date));
-    const past = myBookings.filter((b) => dayMs(b.date) < todayMs).sort((a, b) => dayMs(b.date) - dayMs(a.date));
-    return [...future, ...past];
+    const startMs = (b) => new Date(`${b.date}T${b.start}:00`).getTime();
+    const nowMs = Date.now();
+    const upcoming = myBookings.filter((b) => startMs(b) >= nowMs).sort((a, b) => startMs(a) - startMs(b));
+    const done = myBookings.filter((b) => startMs(b) < nowMs).sort((a, b) => startMs(b) - startMs(a));
+    return [...upcoming, ...done];
   })();
 
   // 教練近3個月實際收入（只計有填學生名嘅堂，用 snapshot 收費；扣除租場費用）+ 各學生上堂紀錄（近3個月）
@@ -3211,7 +3205,6 @@ export default function App() {
             <h2 style={S.sectionTitle}>我的預約記錄</h2>
             <div style={S.segRow}>
               <button style={myBookingsView === "list" ? S.segActive : S.seg} onClick={() => setMyBookingsView("list")}>📋 列表</button>
-              <button style={myBookingsView === "calendar" ? S.segActive : S.seg} onClick={() => setMyBookingsView("calendar")}>📅 圖像</button>
               <button style={myBookingsView === "cancelled" ? S.segActive : S.seg} onClick={() => setMyBookingsView("cancelled")}>🗑️ 已取消</button>
             </div>
           </div>
@@ -3245,62 +3238,7 @@ export default function App() {
                 <p style={S.assistHint}>※ 顯示所有同你有關嘅取消記錄，唔理係你自己、Admin，定係副管理員取消嘅。</p>
               </div>
             );
-          })() : myBookingsView === "calendar" ? (
-            <div style={{ marginTop: 14 }}>
-              <div style={S.weekNav}>
-                <button style={S.navBtn} onClick={() => setWeekOffset((w) => w - 1)}>‹ 上週</button>
-                <span style={S.weekLabel}>{formatDate(days[0])} – {formatDate(days[6])}</span>
-                <button style={S.navBtn} onClick={() => setWeekOffset(0)}>今日</button>
-                <button style={S.navBtn} onClick={() => setWeekOffset((w) => w + 1)}>下週 ›</button>
-                <button style={S.navBtn} onClick={() => { setWeekViewMode((m) => m === "fixed" ? "rolling" : "fixed"); setWeekOffset(0); }} title="切換週視圖模式">🔁 {weekViewMode === "fixed" ? "一至日" : "今日起"}</button>
-              </div>
-              <p style={S.gridHint}>自己嘅課堂正常顯示學生名；其他教練嗰格縮細留白，淨係睇到「有人」，等你一眼睇晒成個禮拜邊忙邊閒。撳「列表」可以管理／取消你自己嘅預約</p>
-              <div style={S.calScroll}>
-                <table style={S.table}>
-                  <thead><tr><th style={S.thTime}></th>
-                    {days.map((d) => { const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={S.dayLabel}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today && <div style={S.todayTag}>今日</div>}</th>; })}
-                  </tr></thead>
-                  <tbody>
-                    {TIME_SLOTS.map((time) => {
-                      const isHourStart = time.endsWith(":00");
-                      return (
-                        <tr key={time}>
-                          <td style={{ ...S.tdTime, color: isHourStart ? "#aaa" : "#3a3a3a" }}>{time}</td>
-                          {days.map((d) => {
-                            const date = formatDate(d);
-                            const here = visibleCellArr(date, time, currentUser.id);
-                            const mine = here.filter((v) => v.coachId === currentUser.id);
-                            const others = here.filter((v) => v.coachId !== currentUser.id);
-                            return (
-                              <td key={date} style={{ ...S.td, borderTop: isHourStart ? "1px solid #2a2a2a" : "1px solid #161616" }}>
-                                {here.length === 0 ? <div style={S.slotDisabled} /> : (
-                                  <div style={S.slotMulti}>
-                                    {mine.map((v, idx) => {
-                                      const label = (v.students && v.students.length > 0) ? v.students.join("、") : (v.type === "duo" ? "1對2" : "1對1");
-                                      const span = Math.round(v.hours * 4);
-                                      const relRow = slotIndex(time) - slotIndex(v.start);
-                                      const showLabel = relRow === 0;
-                                      const showBottomTime = relRow === span - 1;
-                                      return (
-                                        <div key={"m" + idx} style={{ ...S.slotChip, background: liveUser.color + "33", borderLeft: `3px solid ${liveUser.color}` }}>
-                                          {showLabel ? <span style={S.slotNameFull}>{label}</span> : showBottomTime ? <span style={S.slotBottomTime}>{addMinutes(v.start, v.hours * 60)}</span> : null}
-                                        </div>
-                                      );
-                                    })}
-                                    {others.map((v, idx) => <div key={"o" + idx} style={S.occupiedBar} />)}
-                                  </div>
-                                )}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : myBookingsSorted.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
+          })() : myBookingsSorted.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
             <div style={S.bookingList}>
               {myBookingsSorted.map(({ date, start, hours, type, charterType, coachName, students, signatures, createdAt, bookedBy }, i) => {
                 const hrs = hoursUntil(date, start);
@@ -3320,9 +3258,12 @@ export default function App() {
                           {students.map((name) => {
                             const signed = signatures && signatures[name];
                             return (
-                              <button key={name} style={signed ? S.signedChip : S.signChip} onClick={() => !signed && setSignModal({ date, start, coachId: currentUser.id, type, studentName: name })}>
-                                {signed ? `✓ ${name}` : `✍️ ${name}`}
-                              </button>
+                              <div key={name} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                                <button style={signed ? S.signedChip : S.signChip} onClick={() => !signed && setSignModal({ date, start, coachId: currentUser.id, type, studentName: name })}>
+                                  {signed ? `✓ ${name}` : `✍️ ${name}`}
+                                </button>
+                                <button style={{ ...S.signChip, padding: "4px 7px" }} title={`提醒 ${name} 上堂`} onClick={() => sendStudentReminderForBooking(name, date, start)}>📱</button>
+                              </div>
                             );
                           })}
                         </div>
@@ -3534,58 +3475,6 @@ export default function App() {
                   <span>合共</span><span>${drinkCartTotal()}</span>
                 </div>
                 <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={openDrinkCheckout}>下一步：顯示收款 QR</button>
-              </>
-            )}
-          </div>
-
-          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>📱 提醒學生上堂</h2>
-          <div style={S.formCard}>
-            {myRoster.length === 0 ? (
-              <p style={S.emptyText}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
-            ) : (
-              <>
-                <Field label="揀學生">
-                  <select style={S.select} value={reminderStudentName} onChange={(e) => {
-                    const name = e.target.value;
-                    setReminderStudentName(name);
-                    const s = myRoster.find((x) => x.name === name);
-                    setReminderPhone(s?.phone || "");
-                    fillStudentReminderPreview(name, reminderDate, reminderTime);
-                  }}>
-                    <option value="">請選擇</option>
-                    {myRoster.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-                  </select>
-                </Field>
-                {reminderStudentName && (() => {
-                  const now = new Date();
-                  const upcoming = myBookings.filter((b) => b.type !== "charter" && (b.students || []).includes(reminderStudentName) && new Date(`${b.date}T${b.start}:00`) >= now)
-                    .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
-                  return upcoming.length > 0 ? (
-                    <Field label="揀已book嘅堂（自動帶入日期時間，或者下面手動填）">
-                      <select style={S.select} defaultValue="" onChange={(e) => {
-                        if (!e.target.value) return;
-                        const [d, t] = e.target.value.split("_");
-                        setReminderDate(d); setReminderTime(t);
-                        fillStudentReminderPreview(reminderStudentName, d, t);
-                      }}>
-                        <option value="">請選擇</option>
-                        {upcoming.map((b) => <option key={`${b.date}_${b.start}`} value={`${b.date}_${b.start}`}>{b.date} {b.start}（{b.type === "duo" ? "1對2" : "1對1"}）</option>)}
-                      </select>
-                    </Field>
-                  ) : (
-                    <p style={S.assistHint}>呢位學生暫時冇已book嘅堂，可以手動填日期時間。</p>
-                  );
-                })()}
-                <Field label="學生 WhatsApp 電話"><input style={S.input} placeholder="例如 85291234567" value={reminderPhone} onChange={(e) => setReminderPhone(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
-                <Field label="上堂日期"><input style={S.input} type="date" value={reminderDate} onChange={(e) => { setReminderDate(e.target.value); fillStudentReminderPreview(reminderStudentName, e.target.value, reminderTime); }} /></Field>
-                <Field label="上堂時間"><input style={S.input} type="time" value={reminderTime} onChange={(e) => { setReminderTime(e.target.value); fillStudentReminderPreview(reminderStudentName, reminderDate, e.target.value); }} /></Field>
-                {reminderStudentName && (
-                  <>
-                    <Field label="預覽（可以手動修改先send）"><textarea style={{ ...S.input, minHeight: 120, resize: "vertical" }} value={reminderPreview} onChange={(e) => setReminderPreview(e.target.value)} /></Field>
-                    <button style={S.loginBtn} onClick={handleSendStudentReminder}>發送提醒</button>
-                  </>
-                )}
-                <p style={{ ...S.assistHint, marginTop: 8 }}>範本可以喺「文本範本庫」（要Admin權限）度改，範本名叫「⑦ 上堂提醒（學生）」。學生電話會存落名單，下次唔使再打。</p>
               </>
             )}
           </div>
