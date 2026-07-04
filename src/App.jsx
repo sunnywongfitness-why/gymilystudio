@@ -65,7 +65,13 @@ export default function App() {
   const [assistCancelLog, setAssistCancelLog] = useState(() => persisted("assistCancelLog", [])); // {coachId, month, date, start}
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
   const [drinkProducts, setDrinkProducts] = useState(() => persisted("drinkProducts", [])); // {id, name, price} 飲品產品清單，admin喺設定維護
-  const [textTemplates, setTextTemplates] = useState(() => persisted("textTemplates", DEFAULT_TEXT_TEMPLATES)); // {id, name, content} 文本範本庫，取代舊嘅寫死Onboarding文件，admin可自由編輯/新增/刪除
+  // textTemplates嘅預設範本合併：saved data入面冇嘅新增DEFAULT_TEXT_TEMPLATES項目（例如之後新加嘅⑦），自動補返，唔覆蓋user已編輯嘅內容
+  const mergeTemplateDefaults = (saved) => {
+    if (!saved) return DEFAULT_TEXT_TEMPLATES;
+    const missing = DEFAULT_TEXT_TEMPLATES.filter((d) => !saved.some((t) => t.id === d.id));
+    return missing.length ? [...saved, ...missing] : saved;
+  };
+  const [textTemplates, setTextTemplates] = useState(() => mergeTemplateDefaults(persisted("textTemplates", null))); // {id, name, content} 文本範本庫，取代舊嘅寫死Onboarding文件，admin可自由編輯/新增/刪除
   const [newTemplateForm, setNewTemplateForm] = useState({ name: "", content: "" });
   const [sendTextCoachId, setSendTextCoachId] = useState("");
   const [sendTextTemplateId, setSendTextTemplateId] = useState("");
@@ -107,7 +113,7 @@ export default function App() {
     if (d.assistCancelLog !== undefined) setAssistCancelLog(d.assistCancelLog);
     if (d.cancelLog !== undefined) setCancelLog(d.cancelLog);
     if (d.drinkProducts !== undefined) setDrinkProducts(d.drinkProducts);
-    if (d.textTemplates !== undefined) setTextTemplates(d.textTemplates);
+    if (d.textTemplates !== undefined) setTextTemplates(mergeTemplateDefaults(d.textTemplates));
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
   };
@@ -160,6 +166,51 @@ export default function App() {
     }, 500);
   }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates]);
 
+  // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
+  // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
+  useEffect(() => {
+    const nowMs = Date.now();
+    const perCoachAdd = {}; // { coachId: { studentName: extraHours } }
+    const patches = []; // { date, start, hours, type, coachId, studentName }
+    Object.entries(bookings).forEach(([k, arr]) => {
+      const date = k.split("_")[0];
+      arr.forEach((entry) => {
+        if (entry.type === "charter") return;
+        if (k !== `${date}_${entry.start}`) return; // 淨處理呢個booking嘅頭一個15分鐘格，避免同一個booking計多次
+        if (!entry.students || entry.students.length === 0) return;
+        const endTime = addMinutes(entry.start, entry.hours * 60);
+        const endMs = new Date(`${date}T${endTime}:00`).getTime();
+        if (endMs > nowMs) return; // 仲未完成
+        entry.students.forEach((name) => {
+          if (entry.signatures?.[name] || entry.autoDeducted?.[name]) return; // 已經簽咗或者已經自動扣咗
+          if (!perCoachAdd[entry.coachId]) perCoachAdd[entry.coachId] = {};
+          perCoachAdd[entry.coachId][name] = (perCoachAdd[entry.coachId][name] || 0) + entry.hours;
+          patches.push({ date, start: entry.start, hours: entry.hours, type: entry.type, coachId: entry.coachId, studentName: name });
+        });
+      });
+    });
+    if (patches.length === 0) return;
+    setCoaches((prev) => prev.map((c) => {
+      const add = perCoachAdd[c.id];
+      if (!add) return c;
+      const roster = (c.studentRoster || []).map(normStudent);
+      const newRoster = roster.map((s) => add[s.name] !== undefined ? { ...s, used: (s.used || 0) + add[s.name] } : s);
+      return { ...c, studentRoster: newRoster };
+    }));
+    setBookings((prev) => {
+      const next = { ...prev };
+      patches.forEach(({ date, start, hours, type, coachId, studentName }) => {
+        slotsFor(start, hours).forEach((s) => {
+          const key = `${date}_${s}`;
+          next[key] = (next[key] || []).map((e) => (e.coachId === coachId && e.start === start && e.type === type)
+            ? { ...e, autoDeducted: { ...(e.autoDeducted || {}), [studentName]: true } }
+            : e);
+        });
+      });
+      return next;
+    });
+  }, [bookings]);
+
   const [cancelModal, setCancelModal] = useState(null);
   const [signModal, setSignModal] = useState(null); // {date,start,coachId,type,studentName}
   const [adminCancelModal, setAdminCancelModal] = useState(null); // {date,start,coachId,type}
@@ -188,6 +239,11 @@ export default function App() {
   const [incomeDetailMonth, setIncomeDetailMonth] = useState(null); // 每月收入卡「睇明細」展開緊邊個月份+邊個類別，例如 "2026-07:purchase"
   const [kpiDetailModal, setKpiDetailModal] = useState(null); // 總覽6張KPI卡撳落去彈嘅明細modal，值："revenue"|"actual"|"charter"|"expected"|"used"|"drinks"
   const [newStudentName, setNewStudentName] = useState("");
+  const [reminderStudentName, setReminderStudentName] = useState("");
+  const [reminderPhone, setReminderPhone] = useState(""); // 唔會persist，跟返「唔保留學生電話」嘅私隱決定，每次手動輸入
+  const [reminderDate, setReminderDate] = useState("");
+  const [reminderTime, setReminderTime] = useState("19:00");
+  const [reminderPreview, setReminderPreview] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
   const [addStudentCreditModal, setAddStudentCreditModal] = useState(null); // {name, qty}
   const [sigReportModal, setSigReportModal] = useState(null); // {studentName, month}（第2項：學生簽名月度報表）
@@ -414,12 +470,11 @@ export default function App() {
   };
 
   const sendRetroReminder = () => {
-    const { coachId, coachName, date, start, hours } = retroReminderModal;
-    if (!date || !start || !hours) { showToast("請填晒日期／時間／時長", "error"); return; }
-    const end = addMinutes(start, Number(hours) * 60);
-    const notice = { id: "rb" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId, date, start, hours: Number(hours), read: false, createdAt: nowStamp() };
+    const { coachId, coachName, date, start } = retroReminderModal;
+    if (!date) { showToast("請填日期", "error"); return; }
+    const notice = { id: "rb" + Date.now() + "-" + Math.random().toString(36).slice(2), coachId, date, start: start || "", read: false, createdAt: nowStamp() };
     setRetroBookingNotices((prev) => [notice, ...prev]);
-    const text = retroactiveBookingReminderText(coachName, date, start, end);
+    const text = retroactiveBookingReminderText(coachName, date, start);
     const coach = getCoach(coachId);
     if (coach?.phone) {
       window.open(`https://wa.me/${coach.phone}?text=${encodeURIComponent(text)}`, "_blank");
@@ -518,6 +573,25 @@ export default function App() {
       window.open(`https://wa.me/${coach.phone}?text=${encodeURIComponent(sendTextPreview)}`, "_blank");
     } else {
       setCopyInfoModal({ title: `發送文本畀 ${coach.name}`, text: sendTextPreview });
+    }
+  };
+
+  // ---- 提醒學生上堂（第10項新增）：用返「⑦ 上堂提醒」範本，代入{{學生名}}/{{日期}}/{{時間}}；電話唔會persist，每次手動輸入 ----
+  const fillStudentReminderPreview = (name, date, time) => {
+    const tpl = textTemplates.find((t) => t.id === "tpl-student-reminder") || textTemplates.find((t) => t.name.includes("上堂提醒"));
+    if (!tpl) { setReminderPreview(""); return; }
+    let text = tpl.content.replaceAll("{{學生名}}", name || "");
+    text = text.replaceAll("{{日期}}", date || "");
+    text = text.replaceAll("{{時間}}", time || "");
+    setReminderPreview(text);
+  };
+  const handleSendStudentReminder = () => {
+    if (!reminderStudentName) { showToast("請揀學生", "error"); return; }
+    if (!reminderPreview.trim()) { showToast("內容係空嘅", "error"); return; }
+    if (reminderPhone) {
+      window.open(`https://wa.me/${reminderPhone}?text=${encodeURIComponent(reminderPreview)}`, "_blank");
+    } else {
+      setCopyInfoModal({ title: `提醒 ${reminderStudentName} 上堂`, text: reminderPreview });
     }
   };
 
@@ -821,8 +895,7 @@ export default function App() {
 
   // 學生名單由舊版「淨係名」升級做完整 record；呢個 helper 兩種格式都食得（向後兼容舊資料）
   const normStudent = (s) => {
-    const obj = typeof s === "string" ? { name: s, rate: 0, credits: 0, used: 0 } : { rate: 0, credits: 0, used: 0, ...s };
-    delete obj.phone; // 私隱考慮：唔再保留學生電話，亦主動清走舊有已存嘅電話資料
+    const obj = typeof s === "string" ? { name: s, rate: 0, credits: 0, used: 0, phone: "" } : { rate: 0, credits: 0, used: 0, phone: "", ...s };
     return obj;
   };
   const myRoster = (liveUser?.studentRoster || []).map(normStudent);
@@ -1443,7 +1516,7 @@ export default function App() {
       const date = k.split("_")[0];
       arr.forEach((v) => {
         if (k === `${date}_${v.start}`)
-          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null, bookedBy: v.bookedBy || null, students: v.students || [], signatures: v.signatures || {} });
+          allBookings.push({ date, start: v.start, hours: v.hours, type: v.type, charterType: v.charterType, price: v.price || 0, passCost: v.passCost, coachName: v.coachName || "", coach: v.type === "charter" ? null : getCoach(v.coachId), coachId: v.coachId, createdAt: v.createdAt || null, bookedBy: v.bookedBy || null, students: v.students || [], signatures: v.signatures || {} });
       });
     });
     allBookings.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
@@ -1477,9 +1550,9 @@ export default function App() {
     const monthCharter = charterLog.filter((r) => monthKey(r.bookDate) === viewMonth).reduce((a, r) => a + r.amount, 0);
     const monthCharterRecords = charterLog.filter((r) => monthKey(r.bookDate) === viewMonth);
     const monthNonCharterBookings = allBookings.filter((b) => b.type !== "charter" && monthKey(b.date) === viewMonth);
-    const monthExpected = monthNonCharterBookings.reduce((s, b) => s + b.hours, 0);
+    const monthExpected = monthNonCharterBookings.reduce((s, b) => s + (b.passCost ?? b.hours), 0);
     const monthUsedBookings = monthNonCharterBookings.filter((b) => b.date <= todayStr);
-    const monthUsed = monthUsedBookings.reduce((s, b) => s + b.hours, 0);
+    const monthUsed = monthUsedBookings.reduce((s, b) => s + (b.passCost ?? b.hours), 0);
     const monthUsedRevenue = monthUsedBookings.reduce((s, b) => s + (b.price || 0), 0);
     const monthActualRevenue = monthUsedRevenue + monthCharter;
     const monthDrinks = drinkSalesLog.filter((s) => monthKey(s.date) === viewMonth);
@@ -1869,7 +1942,7 @@ export default function App() {
                     <div style={S.bookingTime}>Pass時數 {c.used}/{c.credits} 小時　代book每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
                   </div>
                   <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 時數</button>
-                  <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00", hours: 1 })}>⚠️ 提醒補book</button>
+                  <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00" })}>⚠️ 提醒補book</button>
                   <button style={S.smallBtn} onClick={() => setAdjustUsedModal({ coachId: c.id, used: c.used, note: "" })}>🔧 調整已用時數</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
@@ -1997,7 +2070,7 @@ export default function App() {
                           <div style={S.recDetail}>
                             <div>類型：{type === "charter" ? rentalFull(charterType) : type === "duo" ? "一對二" : "一對一"}</div>
                             <div>收費：{type === "charter" && charterType === "trial" ? "免費" : `$${price}`}</div>
-                            {type !== "charter" && <div>扣時數：{hours} 小時</div>}
+                            {type !== "charter" && <div>扣時數：{b.passCost ?? hours} 小時</div>}
                             {students && students.length > 0 && <div>學生：{students.join("、")}</div>}
                             <div>落單時間：{b.createdAt || "—（舊記錄）"}</div>
                             <div>落單方式：{bookedByLabel(bookedBy)}</div>
@@ -2560,10 +2633,9 @@ export default function App() {
         {retroReminderModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>提醒 {retroReminderModal.coachName} 補book</h3>
-            <p style={S.modalText}>揀返教練實際已上堂但未book返嘅時段，會發送提醒（有電話直接開WhatsApp，冇電話畀你copy），同時喺教練首頁出現banner。</p>
+            <p style={S.modalText}>揀返教練實際已上堂但未book返嘅日期，會發送提醒（有電話直接開WhatsApp，冇電話畀你copy），同時喺教練首頁出現banner。開始時間淨係俾教練參考，實際時間同時長由教練自己確認再填。</p>
             <Field label="日期"><input style={S.input} type="date" value={retroReminderModal.date} onChange={(e) => setRetroReminderModal({ ...retroReminderModal, date: e.target.value })} /></Field>
-            <Field label="開始時間"><input style={S.input} type="time" value={retroReminderModal.start} onChange={(e) => setRetroReminderModal({ ...retroReminderModal, start: e.target.value })} /></Field>
-            <Field label="時長（小時）"><input style={S.input} type="number" step="0.5" min="0.5" value={retroReminderModal.hours} onChange={(e) => setRetroReminderModal({ ...retroReminderModal, hours: e.target.value })} /></Field>
+            <Field label="開始時間（參考用，教練可以自己改）"><input style={S.input} type="time" value={retroReminderModal.start || ""} onChange={(e) => setRetroReminderModal({ ...retroReminderModal, start: e.target.value })} /></Field>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setRetroReminderModal(null)}>取消</button>
               <button style={S.modalConfirm} onClick={sendRetroReminder}>發送提醒</button>
@@ -2623,12 +2695,12 @@ export default function App() {
             title = "本月已book時數";
             sub = "呢個月成個已book嘅非包場時數（唔理過咗未）";
             total = `${monthExpected} 小時`;
-            rows = monthNonCharterBookings.map((b) => ({ main: `${b.type === "duo" ? "1對2" : "1對1"} · ${b.coachName || getCoach(b.coachId)?.name || ""}`, sub: `${b.date} ${b.start}`, val: `${b.hours} 小時` }));
+            rows = monthNonCharterBookings.map((b) => ({ main: `${b.type === "duo" ? "1對2" : "1對1"} · ${b.coachName || getCoach(b.coachId)?.name || ""}`, sub: `${b.date} ${b.start}`, val: `${b.passCost ?? b.hours} 小時` }));
           } else if (kpiDetailModal === "used") {
             title = "本月已用時數(至今)";
             sub = "到今日為止已經發生咗嘅非包場堂";
             total = `${monthUsed} 小時`;
-            rows = monthUsedBookings.map((b) => ({ main: `${b.type === "duo" ? "1對2" : "1對1"} · ${b.coachName || getCoach(b.coachId)?.name || ""}`, sub: `${b.date} ${b.start}`, val: `${b.hours} 小時` }));
+            rows = monthUsedBookings.map((b) => ({ main: `${b.type === "duo" ? "1對2" : "1對1"} · ${b.coachName || getCoach(b.coachId)?.name || ""}`, sub: `${b.date} ${b.start}`, val: `${b.passCost ?? b.hours} 小時` }));
           } else if (kpiDetailModal === "drinks") {
             title = "本月飲品銷售";
             sub = "淨係顯示金額，唔顯示支數";
@@ -2844,9 +2916,9 @@ export default function App() {
                 {myRetroNotices.map((n) => (
                   <div key={n.id} style={S.noticeBanner}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span>⚠️ {n.date} {n.start}–{addMinutes(n.start, n.hours * 60)} 未book返記錄</span>
+                      <span>⚠️ {n.date}{n.start ? `（參考時間 ${n.start}）` : ""} 未book返記錄</span>
                       <div style={{ display: "flex", gap: 8 }}>
-                        <button style={S.linkBtn} onClick={() => setRetroBookModal({ noticeId: n.id, date: n.date, start: n.start, hours: n.hours, sessionType: "solo", students: [] })}>處理</button>
+                        <button style={S.linkBtn} onClick={() => setRetroBookModal({ noticeId: n.id, date: n.date, start: n.start || "19:00", hours: 1, sessionType: "solo", students: [] })}>處理</button>
                         <button style={S.linkBtn} onClick={() => setRetroBookingNotices((prev) => prev.map((x) => x.id === n.id ? { ...x, read: true } : x))}>知道了</button>
                       </div>
                     </div>
@@ -3365,6 +3437,7 @@ export default function App() {
                           if (v !== "") updateStudentField(s.name, "rate", Number(v) || 0);
                         }}
                         onBlur={() => setStudentDrafts((prev) => { const n = { ...prev }; delete n[`${s.name}_rate`]; return n; })} /></Field>
+                      <Field label="電話（WhatsApp 提醒用）"><input style={S.input} placeholder="例如 85291234567" value={s.phone || ""} onChange={(e) => updateStudentField(s.name, "phone", e.target.value.replace(/[^0-9]/g, ""))} /></Field>
                       <div style={S.bookingTime}>已開 {s.credits || 0} 堂　已用 {s.used || 0} 堂</div>
                       <Field label="剩餘堂數">
                         <input style={{ ...S.input, borderColor: low ? "#5a2020" : undefined, color: low ? "#FF8FA3" : "#4ECDC4", fontWeight: 700 }}
@@ -3465,6 +3538,58 @@ export default function App() {
             )}
           </div>
 
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>📱 提醒學生上堂</h2>
+          <div style={S.formCard}>
+            {myRoster.length === 0 ? (
+              <p style={S.emptyText}>你仲未有學生名單，可以喺「上堂情況」分頁新增。</p>
+            ) : (
+              <>
+                <Field label="揀學生">
+                  <select style={S.select} value={reminderStudentName} onChange={(e) => {
+                    const name = e.target.value;
+                    setReminderStudentName(name);
+                    const s = myRoster.find((x) => x.name === name);
+                    setReminderPhone(s?.phone || "");
+                    fillStudentReminderPreview(name, reminderDate, reminderTime);
+                  }}>
+                    <option value="">請選擇</option>
+                    {myRoster.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+                  </select>
+                </Field>
+                {reminderStudentName && (() => {
+                  const now = new Date();
+                  const upcoming = myBookings.filter((b) => b.type !== "charter" && (b.students || []).includes(reminderStudentName) && new Date(`${b.date}T${b.start}:00`) >= now)
+                    .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
+                  return upcoming.length > 0 ? (
+                    <Field label="揀已book嘅堂（自動帶入日期時間，或者下面手動填）">
+                      <select style={S.select} defaultValue="" onChange={(e) => {
+                        if (!e.target.value) return;
+                        const [d, t] = e.target.value.split("_");
+                        setReminderDate(d); setReminderTime(t);
+                        fillStudentReminderPreview(reminderStudentName, d, t);
+                      }}>
+                        <option value="">請選擇</option>
+                        {upcoming.map((b) => <option key={`${b.date}_${b.start}`} value={`${b.date}_${b.start}`}>{b.date} {b.start}（{b.type === "duo" ? "1對2" : "1對1"}）</option>)}
+                      </select>
+                    </Field>
+                  ) : (
+                    <p style={S.assistHint}>呢位學生暫時冇已book嘅堂，可以手動填日期時間。</p>
+                  );
+                })()}
+                <Field label="學生 WhatsApp 電話"><input style={S.input} placeholder="例如 85291234567" value={reminderPhone} onChange={(e) => setReminderPhone(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
+                <Field label="上堂日期"><input style={S.input} type="date" value={reminderDate} onChange={(e) => { setReminderDate(e.target.value); fillStudentReminderPreview(reminderStudentName, e.target.value, reminderTime); }} /></Field>
+                <Field label="上堂時間"><input style={S.input} type="time" value={reminderTime} onChange={(e) => { setReminderTime(e.target.value); fillStudentReminderPreview(reminderStudentName, reminderDate, e.target.value); }} /></Field>
+                {reminderStudentName && (
+                  <>
+                    <Field label="預覽（可以手動修改先send）"><textarea style={{ ...S.input, minHeight: 120, resize: "vertical" }} value={reminderPreview} onChange={(e) => setReminderPreview(e.target.value)} /></Field>
+                    <button style={S.loginBtn} onClick={handleSendStudentReminder}>發送提醒</button>
+                  </>
+                )}
+                <p style={{ ...S.assistHint, marginTop: 8 }}>範本可以喺「文本範本庫」（要Admin權限）度改，範本名叫「⑦ 上堂提醒（學生）」。學生電話會存落名單，下次唔使再打。</p>
+              </>
+            )}
+          </div>
+
           <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議</h2>
           <div style={S.noticeBanner}>
             🔒 呢個意見箱<strong>完全匿名</strong>。
@@ -3490,7 +3615,10 @@ export default function App() {
       {retroBookModal && (
         <div style={S.modalOverlay}><div style={S.modal}>
           <h3 style={S.modalTitle}>補book記錄</h3>
-          <p style={{ ...S.modalText, textAlign: "center" }}>{retroBookModal.date}　{retroBookModal.start}–{addMinutes(retroBookModal.start, Number(retroBookModal.hours) * 60)}（{retroBookModal.hours}小時）</p>
+          <p style={S.assistHint}>請填返實際使用場地嘅開始時間同時長。</p>
+          <Field label="日期"><input style={S.input} type="date" value={retroBookModal.date} onChange={(e) => setRetroBookModal({ ...retroBookModal, date: e.target.value })} /></Field>
+          <Field label="開始時間"><input style={S.input} type="time" value={retroBookModal.start} onChange={(e) => setRetroBookModal({ ...retroBookModal, start: e.target.value })} /></Field>
+          <Field label="時長（小時）"><input style={S.input} type="number" step="0.5" min="0.5" value={retroBookModal.hours} onChange={(e) => setRetroBookModal({ ...retroBookModal, hours: e.target.value })} /></Field>
           <label style={S.label}>類型</label>
           <div style={S.segRow}>
             <button style={retroBookModal.sessionType === "solo" ? S.segActive : S.seg} onClick={() => setRetroBookModal({ ...retroBookModal, sessionType: "solo" })}>1對1</button>

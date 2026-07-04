@@ -156,17 +156,28 @@ Training Pass：
 
 如有查詢，歡迎隨時聯絡工作室。`,
   },
+  {
+    id: "tpl-student-reminder",
+    name: "⑦ 上堂提醒（學生）",
+    content: `{{學生名}}，你好！😊
+
+提提你 📅 {{日期}} {{時間}} 有一堂訓練課，記得準時到場！
+
+如有特殊情況需要調整時間，麻煩提前通知，謝謝！`,
+  },
 ];
 
 // 第6項：Admin發現教練已上堂但未book返，發送嘅補book提醒（WhatsApp deep-link / 系統內部通知共用同一段文字）
-export function retroactiveBookingReminderText(coachName, date, startTime, endTime) {
+// Admin可以提供一個參考開始時間（唔強制），實際開始時間同時長由教練自己確認再填（2026-07定案）
+export function retroactiveBookingReminderText(coachName, date, suggestedStart) {
+  const timeHint = suggestedStart ? `大約 ${suggestedStart}` : "";
   return `${coachName}，你好！🙏
 
-我哋留意到你喺 [${date} ${startTime}–${endTime}] 可能已經用咗場地上堂，但未喺系統入面 book 返。
+我哋留意到你喺 [${date}]${timeHint ? ` ${timeHint}` : ""} 可能已經用咗場地上堂，但未喺系統入面 book 返。
 
-麻煩補返個記錄，方便計算時數同流水帳，多謝晒！
+麻煩補返個記錄，實際開始時間同時長麻煩你自己確認再填，方便計算時數同流水帳，多謝晒！
 
-📱 開App後，首頁會直接見到呢個時段，撳一下就可以補book。`;
+📱 開App後，首頁會直接見到呢個日期，撳一下就可以補book。`;
 }
 
 // 取消記錄核實：Admin對某筆取消記錄有疑問（例如懷疑唔係本人操作），撳掣經WhatsApp向相關人士（教練／副管理員）核實
