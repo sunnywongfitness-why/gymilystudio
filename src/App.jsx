@@ -64,6 +64,7 @@ export default function App() {
   const [charterLog, setCharterLog] = useState(() => persisted("charterLog", [])); // {date, bookDate, start, hours, amount}
   const [assistCancelLog, setAssistCancelLog] = useState(() => persisted("assistCancelLog", [])); // {coachId, month, date, start}
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
+  const [syncConflictLog, setSyncConflictLog] = useState(() => persisted("syncConflictLog", [])); // {at, keysLocal, keysRemote, bookingSlotsLocal, bookingSlotsRemote} 每次偵測到雲端同步衝突就記一筆，唔使人手逼再現先知道有冇撞
   const [drinkProducts, setDrinkProducts] = useState(() => persisted("drinkProducts", [])); // {id, name, price} 飲品產品清單，admin喺設定維護
   // textTemplates嘅預設範本合併：saved data入面冇嘅新增DEFAULT_TEXT_TEMPLATES項目（例如之後新加嘅⑦），自動補返，唔覆蓋user已編輯嘅內容
   const mergeTemplateDefaults = (saved) => {
@@ -114,6 +115,7 @@ export default function App() {
     if (d.cancelLog !== undefined) setCancelLog(d.cancelLog);
     if (d.drinkProducts !== undefined) setDrinkProducts(d.drinkProducts);
     if (d.textTemplates !== undefined) setTextTemplates(mergeTemplateDefaults(d.textTemplates));
+    if (d.syncConflictLog !== undefined) setSyncConflictLog(d.syncConflictLog);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
   };
@@ -129,7 +131,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -152,6 +154,7 @@ export default function App() {
   // 改做逐個 date_time slot 比較：邊個slot本機真係改咗（同上次同步唔同）先用本機，冇改過嘅slot一律用返雲端最新版本（保留第二部裝置嘅改動，包括「呢個slot俾人取消咗、雲端已經冇咗」嘅情況）。
   const mergeBookings = (remoteBookings, localBookings, lastSyncedBookings) => {
     const merged = {};
+    let localCount = 0, remoteCount = 0;
     const allKeys = new Set([...Object.keys(remoteBookings || {}), ...Object.keys(localBookings || {})]);
     allKeys.forEach((key) => {
       const remoteArr = remoteBookings ? remoteBookings[key] : undefined;
@@ -161,20 +164,21 @@ export default function App() {
       if (remoteArr === undefined) {
         // 雲端冇呢個slot：如果上次同步都已經冇（即係本機啱啱先新增嘅），保留本機；
         // 如果上次同步有（即係第二部裝置攞走咗/取消咗），尊重雲端，唔好搬本機舊版本返去
-        if (lastArr === undefined) merged[key] = localArr;
+        if (lastArr === undefined) { merged[key] = localArr; localCount++; }
         return;
       }
-      if (localArr === undefined) { merged[key] = remoteArr; return; }
+      if (localArr === undefined) { merged[key] = remoteArr; remoteCount++; return; }
       const remoteChanged = stableStringify(remoteArr) !== stableStringify(lastArr);
       const localChanged = stableStringify(localArr) !== stableStringify(lastArr);
-      merged[key] = (localChanged && !remoteChanged) ? localArr : remoteArr;
+      if (localChanged && !remoteChanged) { merged[key] = localArr; localCount++; }
+      else { merged[key] = remoteArr; if (remoteChanged) remoteCount++; }
     });
-    return merged;
+    return { merged, localCount, remoteCount };
   };
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -198,20 +202,36 @@ export default function App() {
         let lastSynced = {};
         try { lastSynced = JSON.parse(lastSyncedRef.current) || {}; } catch (e) { /* ignore */ }
         const merged = { ...freshRemote };
+        const keysLocal = [], keysRemote = [];
+        let bookingSlotsLocal = 0, bookingSlotsRemote = 0;
         Object.keys(bundle).forEach((key) => {
-          if (key === "bookings") { merged.bookings = mergeBookings(freshRemote.bookings, bundle.bookings, lastSynced.bookings); return; }
+          if (key === "syncConflictLog") return; // 呢個key自己就係記錄用，唔使當做要merge嘅業務資料
+          if (key === "bookings") {
+            const r = mergeBookings(freshRemote.bookings, bundle.bookings, lastSynced.bookings);
+            merged.bookings = r.merged;
+            bookingSlotsLocal = r.localCount; bookingSlotsRemote = r.remoteCount;
+            if (r.localCount > 0) keysLocal.push(`bookings(${r.localCount}個時段)`);
+            if (r.remoteCount > 0) keysRemote.push(`bookings(${r.remoteCount}個時段)`);
+            return;
+          }
           const localChanged = stableStringify(bundle[key]) !== stableStringify(lastSynced[key]);
-          if (localChanged) merged[key] = bundle[key];
+          if (localChanged) { merged[key] = bundle[key]; keysLocal.push(key); }
+          else if (stableStringify(freshRemote[key]) !== stableStringify(lastSynced[key])) keysRemote.push(key);
         });
         toSave = merged;
         applyBundle(merged); // 本機都要即刻同步返merge之後嘅結果，等第二部裝置嗰邊嘅改動都反映落本機
+        if (keysLocal.length > 0 && keysRemote.length > 0) {
+          // 兩邊都真係有改動先算「撞」，記低一筆，等唔使人手逼都可以事後查返有冇撞過、撞緊咩
+          const conflictEntry = { at: nowStamp(), keysLocal, keysRemote, bookingSlotsLocal, bookingSlotsRemote };
+          setSyncConflictLog((prev) => [conflictEntry, ...prev].slice(0, 200)); // 淨係keep返最近200筆，避免log本身變成新嘅size負擔
+        }
       }
       const finalS = stableStringify(toSave);
       const ok = await cloudSave(toSave);
       if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
       else { setSyncState("error"); } // 失敗唔更新lastSyncedRef，等落次有變動會自然重試
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
   // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
@@ -2183,7 +2203,7 @@ export default function App() {
           <div style={S.container}>
             {currentUser.role === "admin" && (
               <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 2px 10px", marginBottom: 6, position: "sticky", top: 0, background: "#0f0f0f", zIndex: 30 }}>
-                {[["set-drinks", "飲品"], ["set-templates", "文本範本"], ["set-send-text", "發送文本"], ["set-export", "備份"], ["set-suggestions", "意見箱"], ["set-notice", "場地公告"], ["set-admin-phone", "管理員電話"], ["set-whatsapp", "WhatsApp"], ["set-qr-account", "收款QR"], ["set-calendar", "日曆同步"], ["set-password", "密碼"], ["set-subadmins", "副管理員"], ["set-purge", "清理歷史資料"], ["set-reset", "重設資料"]].map(([id, label]) => (
+                {[["set-drinks", "飲品"], ["set-templates", "文本範本"], ["set-send-text", "發送文本"], ["set-export", "備份"], ["set-suggestions", "意見箱"], ["set-notice", "場地公告"], ["set-admin-phone", "管理員電話"], ["set-whatsapp", "WhatsApp"], ["set-qr-account", "收款QR"], ["set-calendar", "日曆同步"], ["set-password", "密碼"], ["set-subadmins", "副管理員"], ["set-sync-log", "同步記錄"], ["set-purge", "清理歷史資料"], ["set-reset", "重設資料"]].map(([id, label]) => (
                   <button key={id} style={{ ...S.smallBtn, whiteSpace: "nowrap", flexShrink: 0 }}
                     onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>
                 ))}
@@ -2393,8 +2413,31 @@ export default function App() {
 
             {currentUser.role === "admin" && (
               <>
-                <h2 id="set-purge" style={{ ...S.sectionTitle, marginTop: 28 }}>清理歷史資料</h2>
+                <h2 id="set-sync-log" style={{ ...S.sectionTitle, marginTop: 28 }}>同步記錄</h2>
                 <div style={S.formCard}>
+                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>兩部裝置幾乎同一時間都改咗嘢，系統會自動merge（邊個key本機真係改過就用本機，冇改過就保留雲端最新版本），唔會盲目覆寫。呢度記低每次真係觸發咗merge嘅情況，方便查返有冇撞過、幾密撞、撞緊邊部分，唔使人手逼先知。</p>
+                  {syncConflictLog.length === 0 ? <p style={S.emptyText}>暫時未偵測到任何同步衝突</p> : (
+                    <div style={S.bookingList}>
+                      {syncConflictLog.slice(0, 30).map((c, i) => (
+                        <div key={i} style={S.bookingItem}>
+                          <div style={{ flex: 1 }}>
+                            <div style={S.bookingTime}>{c.at}</div>
+                            {c.keysLocal.length > 0 && <div style={{ fontSize: 12, color: "#6BCB77", marginTop: 4 }}>用咗本機版本：{c.keysLocal.join("、")}</div>}
+                            {c.keysRemote.length > 0 && <div style={{ fontSize: 12, color: "#4ECDC4", marginTop: 2 }}>保留咗雲端版本（第二部裝置嘅改動）：{c.keysRemote.join("、")}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {syncConflictLog.length > 30 && <p style={{ ...S.assistHint, marginTop: 8 }}>淨係顯示最近30筆，總共記錄咗{syncConflictLog.length}筆。</p>}
+                </div>
+              </>
+            )}
+
+            {currentUser.role === "admin" && (
+              <>
+                <h2 id="set-purge" style={{ ...S.sectionTitle, marginTop: 28 }}>清理歷史資料</h2>
+                <div style={{ ...S.formCard }}>
                   <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>Supabase雲端係成份JSON一齊儲存，長年累月會愈存愈大（簽名圖片係主要嘅size大戶）。呢度可以批量剷走指定日期或之前嘅歷史記錄（bookings、取消/購買/包場/飲品/簽名等），釋放空間。教練帳戶、目前有效Pass時數唔會受影響。</p>
                   <Field label="清走呢個日期（包括）或之前嘅記錄"><input style={S.input} type="date" value={purgeDate} onChange={(e) => setPurgeDate(e.target.value)} /></Field>
                   {purgeDate && (() => {
