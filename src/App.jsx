@@ -22,6 +22,30 @@ import {
 import { S } from "./styles.js";
 import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
 
+// ---- Line icon 系統：取代底部nav bar原本嘅emoji（📊📅👥💰📋⚙️等），統一粗幼、單色描邊，貼返app嘅teal主題（2026-09定案）----
+const ICON_PATHS = {
+  chart: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  wallet: '<path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/>',
+  clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="16" y2="15"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
+  home: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  chevronRight: '<polyline points="9 18 15 12 9 6"/>',
+  chevronLeft: '<polyline points="15 18 9 12 15 6"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  mapPin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
+  database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/>',
+  moreHorizontal: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+};
+function Icon({ name, size = 21 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+      dangerouslySetInnerHTML={{ __html: ICON_PATHS[name] || "" }} />
+  );
+}
+
 export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
   const [currentUser, setCurrentUser] = useState(() => initialSession?.user || null);
@@ -314,6 +338,7 @@ export default function App() {
   const [resetModal, setResetModal] = useState(false);
   const [purgeDate, setPurgeDate] = useState("");
   const [purgeModal, setPurgeModal] = useState(false);
+  const [settingsCategory, setSettingsCategory] = useState(null); // null=分類menu | coach|venue|account|data|other（2026-09重整：15個平舖pill太多，改做分類）
   const [delCoachModal, setDelCoachModal] = useState(null); // coach pending deletion
   const [showPasswords, setShowPasswords] = useState(false);
 
@@ -1277,7 +1302,11 @@ export default function App() {
       const blob = new Blob([pdfBytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = `${invoiceNo}_${record.coachName}.pdf`;
+      // 檔名跟返日期：Invoice_YYYY-MM-DD.pdf；同一日如果多過一張，第二張起加_01、_02...（按實際落單先後排）
+      const sameDayRecords = purchaseLog.filter((r) => r.date === record.date).slice().reverse(); // purchaseLog係新到舊prepend，reverse返做由舊到新
+      const dayIdx = sameDayRecords.findIndex((r) => r.id === record.id);
+      const suffix = dayIdx > 0 ? `_${String(dayIdx).padStart(2, "0")}` : "";
+      a.href = url; a.download = `Invoice_${record.date}${suffix}.pdf`;
       document.body.appendChild(a); a.click();
       setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
       setInvoiceCounter((n) => n + 1);
@@ -1633,7 +1662,7 @@ export default function App() {
     coaches.forEach((c) => { coachPaid[c.id] = purchaseLog.filter((r) => r.coachId === c.id).reduce((a, r) => a + r.amount, 0) + initialCreditsOf(c) * c.rate; });
 
     const isSubAdmin = currentUser.role === "subadmin";
-    const visibleTabs = [["overview", "📊", "總覽"], ["schedule", "📅", "課表"], ["coaches", "👥", "教練"], ["ledger", "💰", "流水帳"], ["records", "📋", "記錄"], ["settings", "⚙️", "設定"]]
+    const visibleTabs = [["overview", "chart", "總覽"], ["schedule", "calendar", "課表"], ["coaches", "users", "教練"], ["ledger", "wallet", "流水帳"], ["records", "clipboard", "記錄"], ["settings", "settings", "設定"]]
       .filter(([k]) => !isSubAdmin || currentUser.permissions?.[k]);
     return (
       <div style={S.appBg}>
@@ -1641,7 +1670,7 @@ export default function App() {
         {venueNotice && venueNotice.trim() && <div style={S.noticeBanner}>📢 {venueNotice}（教練都見到呢條公告）</div>}
         <div style={S.tabRow}>
           {visibleTabs.map(([k, icon, label]) => (
-            <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}><span style={S.tabIcon}>{icon}</span><span>{label}</span></button>
+            <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}><span style={S.tabIcon}><Icon name={icon} /></span><span>{label}</span></button>
           ))}
         </div>
 
@@ -2201,275 +2230,306 @@ export default function App() {
 
         {adminTab === "settings" && (
           <div style={S.container}>
-            {currentUser.role === "admin" && (
-              <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 2px 10px", marginBottom: 6, position: "sticky", top: 0, background: "#0f0f0f", zIndex: 30 }}>
-                {[["set-drinks", "飲品"], ["set-templates", "文本範本"], ["set-send-text", "發送文本"], ["set-export", "備份"], ["set-suggestions", "意見箱"], ["set-notice", "場地公告"], ["set-admin-phone", "管理員電話"], ["set-whatsapp", "WhatsApp"], ["set-qr-account", "收款QR"], ["set-calendar", "日曆同步"], ["set-password", "密碼"], ["set-subadmins", "副管理員"], ["set-sync-log", "同步記錄"], ["set-purge", "清理歷史資料"], ["set-reset", "重設資料"]].map(([id, label]) => (
-                  <button key={id} style={{ ...S.smallBtn, whiteSpace: "nowrap", flexShrink: 0 }}
-                    onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button>
-                ))}
-              </div>
-            )}
-            {currentUser.role === "admin" && (
+            {!settingsCategory ? (
               <>
-                <h2 id="set-drinks" style={S.sectionTitle}>飲品產品管理</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「其他」分頁可以幫學生落單，撳掣顯示上面嘅收款QR。呢度管理有邊啲產品同價錢。</p>
-                  {drinkProducts.length === 0 ? (
-                    <p style={S.emptyText}>仲未上架任何產品</p>
-                  ) : (
-                    <div style={{ marginBottom: 14 }}>
-                      {drinkProducts.map((p) => (
-                        <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px solid #222" }}>
-                          <input style={{ ...S.input, flex: 2 }} value={p.name} onChange={(e) => updateDrinkProduct(p.id, "name", e.target.value)} />
-                          <div style={{ display: "flex", alignItems: "center", flex: 1 }}>
-                            <span style={{ marginRight: 4 }}>$</span>
-                            <input style={S.input} type="number" min="0" value={p.price} onChange={(e) => updateDrinkProduct(p.id, "price", Number(e.target.value) || 0)} />
-                          </div>
-                          <button style={S.smallBtn} onClick={() => removeDrinkProduct(p.id)}>刪除</button>
-                        </div>
-                      ))}
+                <h2 style={S.sectionTitle}>設定</h2>
+                {[
+                  { key: "coach", icon: "wrench", title: "教練工具", desc: "飲品產品、文本範本庫、發送文本俾教練", adminOnly: true },
+                  { key: "venue", icon: "mapPin", title: "場地資訊", desc: "場地公告、收款QR、WhatsApp號碼、管理員電話", adminOnly: true },
+                  { key: "account", icon: "shield", title: "帳戶與安全", desc: isSubAdmin ? "修改我的密碼" : "修改密碼、副管理員帳戶" },
+                  { key: "data", icon: "database", title: "資料管理", desc: currentUser.role === "admin" ? "匯出備份、同步記錄、清理歷史資料、重設資料" : "匯出資料備份" },
+                  { key: "other", icon: "moreHorizontal", title: "其他", desc: "匿名改善建議、日曆同步", adminOnly: true },
+                ].filter((c) => !c.adminOnly || currentUser.role === "admin").map((c) => (
+                  <div key={c.key} onClick={() => setSettingsCategory(c.key)}
+                    style={{ display: "flex", alignItems: "center", gap: 14, background: "#1a1a1a", border: "1px solid #262626", borderRadius: 14, padding: 16, marginBottom: 10, cursor: "pointer" }}>
+                    <div style={{ width: 42, height: 42, borderRadius: 11, background: "#14302e", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#4ECDC4" }}>
+                      <Icon name={c.icon} size={22} />
                     </div>
-                  )}
-                  <label style={S.label}>新增產品</label>
-                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                    <input style={{ ...S.input, flex: 2 }} placeholder="產品名（例如：樽裝水）" value={newDrinkForm.name} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, name: e.target.value })} />
-                    <input style={{ ...S.input, flex: 1 }} type="number" min="0" placeholder="$" value={newDrinkForm.price} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, price: e.target.value })} />
-                  </div>
-                  <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addDrinkProduct}>新增</button>
-                </div>
-
-                <h2 id="set-templates" style={{ ...S.sectionTitle, marginTop: 28 }}>文本範本庫</h2>
-                <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>可用 <code>{"{{教練名}}"}</code>、<code>{"{{時數}}"}</code> 呢類placeholder，喺下面「發送文本」揀教練嗰陣會自動代入（時數冇現成數字，留喺預覽度自己手打）。</p>
-                {textTemplates.map((t) => (
-                  <div key={t.id} style={S.formCard}>
-                    <Field label="範本名稱"><input style={S.input} value={t.name} onChange={(e) => updateTemplate(t.id, "name", e.target.value)} /></Field>
-                    <Field label="內文"><textarea style={{ ...S.input, minHeight: 140, resize: "vertical" }} value={t.content} onChange={(e) => updateTemplate(t.id, "content", e.target.value)} /></Field>
-                    <button style={{ ...S.delBtn }} onClick={() => removeTemplate(t.id)}>刪除呢個範本</button>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14.5, fontWeight: 600, marginBottom: 2 }}>{c.title}</div>
+                      <div style={{ fontSize: 11.5, color: "#777", lineHeight: 1.4 }}>{c.desc}</div>
+                    </div>
+                    <div style={{ color: "#444", flexShrink: 0 }}><Icon name="chevronRight" size={18} /></div>
                   </div>
                 ))}
-                <div style={S.formCard}>
-                  <Field label="新範本名稱"><input style={S.input} placeholder="例如：續約提醒" value={newTemplateForm.name} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, name: e.target.value })} /></Field>
-                  <Field label="新範本內文"><textarea style={{ ...S.input, minHeight: 100, resize: "vertical" }} value={newTemplateForm.content} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, content: e.target.value })} /></Field>
-                  <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addTemplate}>+ 新增範本</button>
-                </div>
-
-                <h2 id="set-send-text" style={{ ...S.sectionTitle, marginTop: 28 }}>發送文本俾教練</h2>
-                <div style={S.formCard}>
-                  <Field label="揀教練">
-                    <select style={S.select} value={sendTextCoachId} onChange={(e) => { setSendTextCoachId(e.target.value); fillTemplatePreview(sendTextTemplateId, e.target.value); }}>
-                      <option value="">請選擇</option>
-                      {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="揀範本">
-                    <select style={S.select} value={sendTextTemplateId} onChange={(e) => { setSendTextTemplateId(e.target.value); fillTemplatePreview(e.target.value, sendTextCoachId); }}>
-                      <option value="">請選擇</option>
-                      {textTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </Field>
-                  {sendTextTemplateId && (
-                    <>
-                      <Field label="預覽（可以手動修改先send，例如填返{{時數}}）"><textarea style={{ ...S.input, minHeight: 160, resize: "vertical" }} value={sendTextPreview} onChange={(e) => setSendTextPreview(e.target.value)} /></Field>
-                      <button style={S.loginBtn} onClick={handleSendText}>發送</button>
-                      {sendTextCoachId && !coaches.find((c) => String(c.id) === String(sendTextCoachId))?.phone && (
-                        <p style={{ ...S.assistHint, marginTop: 8 }}>呢位教練未填電話號碼，撳「發送」會生成文字畀你複製（唔會自動開 WhatsApp）。</p>
-                      )}
-                    </>
-                  )}
-                </div>
-
               </>
-            )}
-
-            <h2 id="set-export" style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料備份</h2>
-            <div style={S.formCard}>
-              <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出檔案可直接用 Google Sheets 或 Excel 打開，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄、取消記錄。建議定期備份。</p>
-              <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>📊 匯出 Google Sheet 備份</button>
-              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff", marginTop: 10 }} onClick={copyLedgerCsv}>📋 複製流水帳 (CSV)</button>
-              <p style={{ ...S.assistHint, marginTop: 10 }}>※ 若下載冇反應（手機 app 常見），可改按「複製流水帳」再貼入 Google Sheets / Excel；或喺電腦瀏覽器開啟再匯出。</p>
-            </div>
-
-            {currentUser.role === "admin" && (
+            ) : (
               <>
-                <h2 id="set-suggestions" style={{ ...S.sectionTitle, marginTop: 28 }}>匿名改善建議（只有你睇到）</h2>
-                <p style={S.assistHint}>教練透過「意見」分頁匿名提交，系統冇存任何身份資訊，連你都查唔到係邊位教練寫嘅。</p>
-                {suggestionBox.length === 0 ? <p style={S.emptyText}>暫無意見</p> : (
-                  <div style={S.bookingList}>
-                    {suggestionBox.map((sg) => (
-                      <div key={sg.id} style={{ ...S.bookingItem, opacity: sg.read ? 0.55 : 1 }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={S.bookingTime}>{sg.date}</div>
-                          <div style={{ ...S.bookingCoach, fontWeight: 400, marginTop: 4, whiteSpace: "pre-wrap" }}>{sg.text}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                  <div onClick={() => setSettingsCategory(null)} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 10, background: "#1a1a1a", border: "1px solid #262626", cursor: "pointer", color: "#ccc" }}>
+                    <Icon name="chevronLeft" size={18} />
+                  </div>
+                  <h2 style={{ ...S.sectionTitle, marginTop: 0 }}>
+                    {{ coach: "教練工具", venue: "場地資訊", account: "帳戶與安全", data: "資料管理", other: "其他" }[settingsCategory]}
+                  </h2>
+                </div>
+
+                {settingsCategory === "coach" && currentUser.role === "admin" && (
+                  <>
+                    <h2 style={S.sectionTitle}>飲品產品管理</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「其他」分頁可以幫學生落單，撳掣顯示上面嘅收款QR。呢度管理有邊啲產品同價錢。</p>
+                      {drinkProducts.length === 0 ? (
+                        <p style={S.emptyText}>仲未上架任何產品</p>
+                      ) : (
+                        <div style={{ marginBottom: 14 }}>
+                          {drinkProducts.map((p) => (
+                            <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px solid #222" }}>
+                              <input style={{ ...S.input, flex: 2 }} value={p.name} onChange={(e) => updateDrinkProduct(p.id, "name", e.target.value)} />
+                              <div style={{ display: "flex", alignItems: "center", flex: 1 }}>
+                                <span style={{ marginRight: 4 }}>$</span>
+                                <input style={S.input} type="number" min="0" value={p.price} onChange={(e) => updateDrinkProduct(p.id, "price", Number(e.target.value) || 0)} />
+                              </div>
+                              <button style={S.smallBtn} onClick={() => removeDrinkProduct(p.id)}>刪除</button>
+                            </div>
+                          ))}
                         </div>
-                        <button style={S.linkBtn} onClick={() => setSuggestionBox((prev) => prev.map((x) => x.id === sg.id ? { ...x, read: !x.read } : x))}>{sg.read ? "標記未閱" : "標記已閱"}</button>
+                      )}
+                      <label style={S.label}>新增產品</label>
+                      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                        <input style={{ ...S.input, flex: 2 }} placeholder="產品名（例如：樽裝水）" value={newDrinkForm.name} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, name: e.target.value })} />
+                        <input style={{ ...S.input, flex: 1 }} type="number" min="0" placeholder="$" value={newDrinkForm.price} onChange={(e) => setNewDrinkForm({ ...newDrinkForm, price: e.target.value })} />
+                      </div>
+                      <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addDrinkProduct}>新增</button>
+                    </div>
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>文本範本庫</h2>
+                    <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>可用 <code>{"{{教練名}}"}</code>、<code>{"{{時數}}"}</code> 呢類placeholder，喺下面「發送文本」揀教練嗰陣會自動代入（時數冇現成數字，留喺預覽度自己手打）。</p>
+                    {textTemplates.map((t) => (
+                      <div key={t.id} style={S.formCard}>
+                        <Field label="範本名稱"><input style={S.input} value={t.name} onChange={(e) => updateTemplate(t.id, "name", e.target.value)} /></Field>
+                        <Field label="內文"><textarea style={{ ...S.input, minHeight: 140, resize: "vertical" }} value={t.content} onChange={(e) => updateTemplate(t.id, "content", e.target.value)} /></Field>
+                        <button style={{ ...S.delBtn }} onClick={() => removeTemplate(t.id)}>刪除呢個範本</button>
                       </div>
                     ))}
-                  </div>
+                    <div style={S.formCard}>
+                      <Field label="新範本名稱"><input style={S.input} placeholder="例如：續約提醒" value={newTemplateForm.name} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, name: e.target.value })} /></Field>
+                      <Field label="新範本內文"><textarea style={{ ...S.input, minHeight: 100, resize: "vertical" }} value={newTemplateForm.content} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, content: e.target.value })} /></Field>
+                      <button style={{ ...S.loginBtn, marginTop: 10 }} onClick={addTemplate}>+ 新增範本</button>
+                    </div>
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>發送文本俾教練</h2>
+                    <div style={S.formCard}>
+                      <Field label="揀教練">
+                        <select style={S.select} value={sendTextCoachId} onChange={(e) => { setSendTextCoachId(e.target.value); fillTemplatePreview(sendTextTemplateId, e.target.value); }}>
+                          <option value="">請選擇</option>
+                          {coaches.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="揀範本">
+                        <select style={S.select} value={sendTextTemplateId} onChange={(e) => { setSendTextTemplateId(e.target.value); fillTemplatePreview(e.target.value, sendTextCoachId); }}>
+                          <option value="">請選擇</option>
+                          {textTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                      </Field>
+                      {sendTextTemplateId && (
+                        <>
+                          <Field label="預覽（可以手動修改先send，例如填返{{時數}}）"><textarea style={{ ...S.input, minHeight: 160, resize: "vertical" }} value={sendTextPreview} onChange={(e) => setSendTextPreview(e.target.value)} /></Field>
+                          <button style={S.loginBtn} onClick={handleSendText}>發送</button>
+                          {sendTextCoachId && !coaches.find((c) => String(c.id) === String(sendTextCoachId))?.phone && (
+                            <p style={{ ...S.assistHint, marginTop: 8 }}>呢位教練未填電話號碼，撳「發送」會生成文字畀你複製（唔會自動開 WhatsApp）。</p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </>
                 )}
 
-                <h2 id="set-notice" style={{ ...S.sectionTitle, marginTop: 28 }}>場地公告</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
-                  <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
-                </div>
-
-                <h2 id="set-admin-phone" style={{ ...S.sectionTitle, marginTop: 28 }}>管理員電話</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>用嚟WhatsApp核實可疑取消記錄（例如懷疑唔係本人操作）。教練睇唔到呢個號碼。</p>
-                  <Field label="電話號碼"><input style={S.input} placeholder="例如 85291234567" value={adminPhone} onChange={(e) => setAdminPhone(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
-                </div>
-
-                <h2 id="set-whatsapp" style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
-                  <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
-                </div>
-
-                <h2 id="set-qr-account" style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>上傳收款 QR code（例如轉數快／PayMe）。會喺教練 Onboarding 付款資訊同買 Pass 畫面顯示，方便教練掃碼付款。可隨時更換。</p>
-                  {paymentQR ? (
-                    <div style={{ textAlign: "center", marginBottom: 12 }}>
-                      <img src={paymentQR} alt="收款 QR" style={{ maxWidth: 200, width: "100%", borderRadius: 10, background: "#fff", padding: 8, boxSizing: "border-box" }} />
+                {settingsCategory === "venue" && currentUser.role === "admin" && (
+                  <>
+                    <h2 style={S.sectionTitle}>場地公告</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>例如「本週洗手間維修，請使用更衣室」。所有教練登入會見到呢條提示。留空就唔顯示。</p>
+                      <Field label="公告內容"><textarea style={{ ...S.input, minHeight: 70, resize: "vertical" }} value={venueNotice} onChange={(e) => setVenueNotice(e.target.value)} placeholder="留空＝唔顯示" /></Field>
                     </div>
-                  ) : <p style={S.emptyText}>仲未上傳</p>}
-                  <label style={{ ...S.loginBtn, display: "block", textAlign: "center", cursor: "pointer" }}>
-                    {paymentQR ? "更換 QR Code" : "上傳 QR Code"}
-                    <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleQRUpload(e.target.files?.[0])} />
-                  </label>
-                  {paymentQR && <button style={{ ...S.smallBtn, width: "100%", marginTop: 8 }} onClick={() => setPaymentQR("")}>移除</button>}
-                </div>
 
-                <h2 id="set-calendar" style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
-                <div style={S.formCard}>
-                  {!cloudEnabled ? (
-                    <p style={{ ...S.bookingTime, lineHeight: 1.6 }}>呢個功能需要先開啟雲端同步。</p>
-                  ) : (
-                    <>
-                      <p style={{ ...S.bookingTime, marginBottom: 10, lineHeight: 1.6 }}>生成連結加入 Google／Apple Calendar,顯示全場所有教練嘅 booking(連教練名)。</p>
-                      {adminCalendarFeedUrl ? (
-                        <>
-                          <input style={{ ...S.input, fontSize: 11 }} readOnly value={adminCalendarFeedUrl} onFocus={(e) => e.target.select()} />
-                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                            <button style={{ ...S.creditBtn, flex: 1 }} onClick={async () => { try { await navigator.clipboard.writeText(adminCalendarFeedUrl); showToast("已複製連結"); } catch (e) { showToast("複製失敗，請長按手動複製", "error"); } }}>📋 複製連結</button>
-                            <button style={{ ...S.smallBtn, flex: 1 }} onClick={regenerateAdminCalendarToken}>🔄 重新生成</button>
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>管理員電話</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>用嚟WhatsApp核實可疑取消記錄（例如懷疑唔係本人操作）。教練睇唔到呢個號碼。</p>
+                      <Field label="電話號碼"><input style={S.input} placeholder="例如 85291234567" value={adminPhone} onChange={(e) => setAdminPhone(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
+                    </div>
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>場地 QR Code WhatsApp 號碼</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>教練喺「我的預約」撳「攞 QR Code」會自動開 WhatsApp 傳訊息去呢個號碼。請輸入完整國際格式（例如香港：85291234567，唔使 + 號）。</p>
+                      <Field label="WhatsApp 號碼"><input style={S.input} placeholder="例如 85291234567" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value.replace(/[^0-9]/g, ""))} /></Field>
+                    </div>
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>收款 QR Code</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>上傳收款 QR code（例如轉數快／PayMe）。會喺教練 Onboarding 付款資訊同買 Pass 畫面顯示，方便教練掃碼付款。可隨時更換。</p>
+                      {paymentQR ? (
+                        <div style={{ textAlign: "center", marginBottom: 12 }}>
+                          <img src={paymentQR} alt="收款 QR" style={{ maxWidth: 200, width: "100%", borderRadius: 10, background: "#fff", padding: 8, boxSizing: "border-box" }} />
+                        </div>
+                      ) : <p style={S.emptyText}>仲未上傳</p>}
+                      <label style={{ ...S.loginBtn, display: "block", textAlign: "center", cursor: "pointer" }}>
+                        {paymentQR ? "更換 QR Code" : "上傳 QR Code"}
+                        <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleQRUpload(e.target.files?.[0])} />
+                      </label>
+                      {paymentQR && <button style={{ ...S.smallBtn, width: "100%", marginTop: 8 }} onClick={() => setPaymentQR("")}>移除</button>}
+                    </div>
+                  </>
+                )}
+
+                {settingsCategory === "account" && (
+                  <>
+                    <h2 style={S.sectionTitle}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
+                    <div style={S.formCard}>
+                      <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
+                      <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
+                      <Field label="確認新密碼"><input style={S.input} type="password" value={pwForm.new2} onChange={(e) => setPwForm({ ...pwForm, new2: e.target.value })} /></Field>
+                      <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
+                    </div>
+                    <p style={S.assistHint}>※ 教練自己 book 堂、同 Admin 代教練 book 堂，而家統一用 Training Pass 制計費同扣減：$100/小時（1對2 額外多扣0.5小時），兩條path扣緊同一個時數池。</p>
+
+                    {currentUser.role === "admin" && (
+                      <>
+                        <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>副管理員帳戶</h2>
+                        <p style={S.gridHint}>副管理員可登入並使用下面開啟咗嘅分頁，但唔可以管理副管理員帳戶本身或重設資料。</p>
+                        <div style={S.bookingList}>
+                          {subAdmins.map((s) => (
+                            <div key={s.id} style={S.formCard}>
+                              <Field label="顯示名稱"><input style={S.input} value={s.name} onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, name: e.target.value } : x))} /></Field>
+                              <Field label="登入帳號名稱"><input style={S.input} value={s.username} onChange={(e) => {
+                                const v = e.target.value.trim().toLowerCase();
+                                if (v === "admin") { showToast("帳號名稱不可用 admin", "error"); return; }
+                                const dup = coaches.some((c) => (c.username || "").toLowerCase() === v) || subAdmins.some((x) => x.id !== s.id && (x.username || "").toLowerCase() === v);
+                                if (dup) { showToast("帳號名稱已被使用", "error"); return; }
+                                setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, username: e.target.value } : x));
+                              }} /></Field>
+                              <Field label="密碼"><input style={S.input} value={s.password} onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, password: e.target.value } : x))} /></Field>
+                              <Field label="電話號碼（用嚟WhatsApp核實可疑取消記錄，唔會俾教練睇到）"><input style={S.input} value={s.phone || ""} placeholder="例如 85291234567" onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, phone: e.target.value.replace(/[^0-9]/g, "") } : x))} /></Field>
+                              <label style={S.label}>可使用分頁</label>
+                              <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
+                                {[["overview", "總覽"], ["schedule", "課表"], ["coaches", "教練"], ["ledger", "流水帳"], ["records", "記錄"], ["settings", "設定"]].map(([k, label]) => (
+                                  <label key={k} style={S.checkLabel}>
+                                    <input type="checkbox" checked={!!s.permissions?.[k]}
+                                      onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, permissions: { ...x.permissions, [k]: e.target.checked } } : x))} /> {label}
+                                  </label>
+                                ))}
+                              </div>
+                              <button style={{ ...S.delBtn, marginTop: 12 }} onClick={() => { setSubAdmins((prev) => prev.filter((x) => x.id !== s.id)); showToast("已刪除副管理員"); }}>刪除呢個帳戶</button>
+                            </div>
+                          ))}
+                        </div>
+                        <button style={{ ...S.addBtn, marginTop: 12 }} onClick={() => {
+                          const newId = Math.max(0, ...subAdmins.map((s) => s.id)) + 1;
+                          setSubAdmins((prev) => [...prev, { id: newId, username: `subadmin${newId}`, password: "1234", name: `副管理員${newId}`, phone: "", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } }]);
+                        }}>+ 新增副管理員</button>
+                      </>
+                    )}
+                  </>
+                )}
+
+                {settingsCategory === "data" && (
+                  <>
+                    <h2 style={S.sectionTitle}>匯出資料備份</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出檔案可直接用 Google Sheets 或 Excel 打開，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄、取消記錄。建議定期備份。</p>
+                      <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>📊 匯出 Google Sheet 備份</button>
+                      <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff", marginTop: 10 }} onClick={copyLedgerCsv}>📋 複製流水帳 (CSV)</button>
+                      <p style={{ ...S.assistHint, marginTop: 10 }}>※ 若下載冇反應（手機 app 常見），可改按「複製流水帳」再貼入 Google Sheets / Excel；或喺電腦瀏覽器開啟再匯出。</p>
+                    </div>
+
+                    {currentUser.role === "admin" && (
+                      <>
+                        <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>同步記錄</h2>
+                        <div style={S.formCard}>
+                          <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>兩部裝置幾乎同一時間都改咗嘢，系統會自動merge（邊個key本機真係改過就用本機，冇改過就保留雲端最新版本），唔會盲目覆寫。呢度記低每次真係觸發咗merge嘅情況，方便查返有冇撞過、幾密撞、撞緊邊部分，唔使人手逼先知。</p>
+                          {syncConflictLog.length === 0 ? <p style={S.emptyText}>暫時未偵測到任何同步衝突</p> : (
+                            <div style={S.bookingList}>
+                              {syncConflictLog.slice(0, 30).map((c, i) => (
+                                <div key={i} style={S.bookingItem}>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={S.bookingTime}>{c.at}</div>
+                                    {c.keysLocal.length > 0 && <div style={{ fontSize: 12, color: "#6BCB77", marginTop: 4 }}>用咗本機版本：{c.keysLocal.join("、")}</div>}
+                                    {c.keysRemote.length > 0 && <div style={{ fontSize: 12, color: "#4ECDC4", marginTop: 2 }}>保留咗雲端版本（第二部裝置嘅改動）：{c.keysRemote.join("、")}</div>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {syncConflictLog.length > 30 && <p style={{ ...S.assistHint, marginTop: 8 }}>淨係顯示最近30筆，總共記錄咗{syncConflictLog.length}筆。</p>}
+                        </div>
+
+                        <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>清理歷史資料</h2>
+                        <div style={{ ...S.formCard }}>
+                          <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>Supabase雲端係成份JSON一齊儲存，長年累月會愈存愈大（簽名圖片係主要嘅size大戶）。呢度可以批量剷走指定日期或之前嘅歷史記錄（bookings、取消/購買/包場/飲品/簽名等），釋放空間。教練帳戶、目前有效Pass時數唔會受影響。</p>
+                          <Field label="清走呢個日期（包括）或之前嘅記錄"><input style={S.input} type="date" value={purgeDate} onChange={(e) => setPurgeDate(e.target.value)} /></Field>
+                          {purgeDate && (() => {
+                            const c = purgeCountsBefore(purgeDate);
+                            return c.total === 0
+                              ? <p style={S.emptyText}>呢個日期之前冇任何記錄</p>
+                              : (
+                                <div style={{ ...S.purchaseBreakdown }}>
+                                  <div style={{ fontSize: 13, color: "#ccc" }}>會剷走：</div>
+                                  {c.bookingCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.bookingCount} 個bookings時段</div>}
+                                  {c.cancelCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.cancelCount} 筆取消記錄</div>}
+                                  {c.purchaseCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.purchaseCount} 筆購買時數記錄</div>}
+                                  {c.charterCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.charterCount} 筆包場/小組記錄</div>}
+                                  {c.drinkCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.drinkCount} 筆飲品記錄</div>}
+                                  {c.passUsageCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.passUsageCount} 筆Pass使用記錄</div>}
+                                  {c.studentPurchaseCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.studentPurchaseCount} 筆學生購買記錄</div>}
+                                  {c.signatureCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.signatureCount} 張簽名圖片</div>}
+                                </div>
+                              );
+                          })()}
+                          <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff", marginTop: 10 }} disabled={!purgeDate || purgeCountsBefore(purgeDate)?.total === 0} onClick={() => setPurgeModal(true)}>🗑️ 清理歷史資料</button>
+                        </div>
+
+                        <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>重設資料</h2>
+                        <div style={S.formCard}>
+                          <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>清除呢部裝置嘅所有資料，回復至初始狀態。建議先匯出備份。此動作無法復原。</p>
+                          <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff" }} onClick={() => setResetModal(true)}>🗑️ 重設所有資料</button>
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+
+                {settingsCategory === "other" && currentUser.role === "admin" && (
+                  <>
+                    <h2 style={S.sectionTitle}>匿名改善建議（只有你睇到）</h2>
+                    <p style={S.assistHint}>教練透過「意見」分頁匿名提交，系統冇存任何身份資訊，連你都查唔到係邊位教練寫嘅。</p>
+                    {suggestionBox.length === 0 ? <p style={S.emptyText}>暫無意見</p> : (
+                      <div style={S.bookingList}>
+                        {suggestionBox.map((sg) => (
+                          <div key={sg.id} style={{ ...S.bookingItem, opacity: sg.read ? 0.55 : 1 }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={S.bookingTime}>{sg.date}</div>
+                              <div style={{ ...S.bookingCoach, fontWeight: 400, marginTop: 4, whiteSpace: "pre-wrap" }}>{sg.text}</div>
+                            </div>
+                            <button style={S.linkBtn} onClick={() => setSuggestionBox((prev) => prev.map((x) => x.id === sg.id ? { ...x, read: !x.read } : x))}>{sg.read ? "標記未閱" : "標記已閱"}</button>
                           </div>
-                          <p style={{ ...S.assistHint, marginTop: 8 }}>連結等於密碼，請唔好分享畀其他人。</p>
-                        </>
-                      ) : (
-                        <button style={S.loginBtn} onClick={ensureAdminCalendarToken}>生成同步連結</button>
-                      )}
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-
-            <h2 id="set-password" style={{ ...S.sectionTitle, marginTop: 28 }}>修改{isSubAdmin ? "我的" : "管理員"}密碼</h2>
-            <div style={S.formCard}>
-              <Field label="舊密碼"><input style={S.input} type="password" value={pwForm.old} onChange={(e) => setPwForm({ ...pwForm, old: e.target.value })} /></Field>
-              <Field label="新密碼"><input style={S.input} type="password" value={pwForm.new1} onChange={(e) => setPwForm({ ...pwForm, new1: e.target.value })} /></Field>
-              <Field label="確認新密碼"><input style={S.input} type="password" value={pwForm.new2} onChange={(e) => setPwForm({ ...pwForm, new2: e.target.value })} /></Field>
-              <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
-            </div>
-            <p style={S.assistHint}>※ 教練自己 book 堂、同 Admin 代教練 book 堂，而家統一用 Training Pass 制計費同扣減：$100/小時（1對2 額外多扣0.5小時），兩條path扣緊同一個時數池。</p>
-
-            {currentUser.role === "admin" && (
-              <>
-                <h2 id="set-subadmins" style={{ ...S.sectionTitle, marginTop: 28 }}>副管理員帳戶</h2>
-                <p style={S.gridHint}>副管理員可登入並使用下面開啟咗嘅分頁，但唔可以管理副管理員帳戶本身或重設資料。</p>
-                <div style={S.bookingList}>
-                  {subAdmins.map((s) => (
-                    <div key={s.id} style={S.formCard}>
-                      <Field label="顯示名稱"><input style={S.input} value={s.name} onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, name: e.target.value } : x))} /></Field>
-                      <Field label="登入帳號名稱"><input style={S.input} value={s.username} onChange={(e) => {
-                        const v = e.target.value.trim().toLowerCase();
-                        if (v === "admin") { showToast("帳號名稱不可用 admin", "error"); return; }
-                        const dup = coaches.some((c) => (c.username || "").toLowerCase() === v) || subAdmins.some((x) => x.id !== s.id && (x.username || "").toLowerCase() === v);
-                        if (dup) { showToast("帳號名稱已被使用", "error"); return; }
-                        setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, username: e.target.value } : x));
-                      }} /></Field>
-                      <Field label="密碼"><input style={S.input} value={s.password} onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, password: e.target.value } : x))} /></Field>
-                      <Field label="電話號碼（用嚟WhatsApp核實可疑取消記錄，唔會俾教練睇到）"><input style={S.input} value={s.phone || ""} placeholder="例如 85291234567" onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, phone: e.target.value.replace(/[^0-9]/g, "") } : x))} /></Field>
-                      <label style={S.label}>可使用分頁</label>
-                      <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
-                        {[["overview", "總覽"], ["schedule", "課表"], ["coaches", "教練"], ["ledger", "流水帳"], ["records", "記錄"], ["settings", "設定"]].map(([k, label]) => (
-                          <label key={k} style={S.checkLabel}>
-                            <input type="checkbox" checked={!!s.permissions?.[k]}
-                              onChange={(e) => setSubAdmins((prev) => prev.map((x) => x.id === s.id ? { ...x, permissions: { ...x.permissions, [k]: e.target.checked } } : x))} /> {label}
-                          </label>
                         ))}
                       </div>
-                      <button style={{ ...S.delBtn, marginTop: 12 }} onClick={() => { setSubAdmins((prev) => prev.filter((x) => x.id !== s.id)); showToast("已刪除副管理員"); }}>刪除呢個帳戶</button>
+                    )}
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>同步落自己嘅日曆</h2>
+                    <div style={S.formCard}>
+                      {!cloudEnabled ? (
+                        <p style={{ ...S.bookingTime, lineHeight: 1.6 }}>呢個功能需要先開啟雲端同步。</p>
+                      ) : (
+                        <>
+                          <p style={{ ...S.bookingTime, marginBottom: 10, lineHeight: 1.6 }}>生成連結加入 Google／Apple Calendar,顯示全場所有教練嘅 booking(連教練名)。</p>
+                          {adminCalendarFeedUrl ? (
+                            <>
+                              <input style={{ ...S.input, fontSize: 11 }} readOnly value={adminCalendarFeedUrl} onFocus={(e) => e.target.select()} />
+                              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                                <button style={{ ...S.creditBtn, flex: 1 }} onClick={async () => { try { await navigator.clipboard.writeText(adminCalendarFeedUrl); showToast("已複製連結"); } catch (e) { showToast("複製失敗，請長按手動複製", "error"); } }}>📋 複製連結</button>
+                                <button style={{ ...S.smallBtn, flex: 1 }} onClick={regenerateAdminCalendarToken}>🔄 重新生成</button>
+                              </div>
+                              <p style={{ ...S.assistHint, marginTop: 8 }}>連結等於密碼，請唔好分享畀其他人。</p>
+                            </>
+                          ) : (
+                            <button style={S.loginBtn} onClick={ensureAdminCalendarToken}>生成同步連結</button>
+                          )}
+                        </>
+                      )}
                     </div>
-                  ))}
-                </div>
-                <button style={{ ...S.addBtn, marginTop: 12 }} onClick={() => {
-                  const newId = Math.max(0, ...subAdmins.map((s) => s.id)) + 1;
-                  setSubAdmins((prev) => [...prev, { id: newId, username: `subadmin${newId}`, password: "1234", name: `副管理員${newId}`, phone: "", permissions: { overview: true, schedule: true, coaches: true, ledger: true, records: true, settings: true } }]);
-                }}>+ 新增副管理員</button>
-              </>
-            )}
-
-            {currentUser.role === "admin" && (
-              <>
-                <h2 id="set-sync-log" style={{ ...S.sectionTitle, marginTop: 28 }}>同步記錄</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>兩部裝置幾乎同一時間都改咗嘢，系統會自動merge（邊個key本機真係改過就用本機，冇改過就保留雲端最新版本），唔會盲目覆寫。呢度記低每次真係觸發咗merge嘅情況，方便查返有冇撞過、幾密撞、撞緊邊部分，唔使人手逼先知。</p>
-                  {syncConflictLog.length === 0 ? <p style={S.emptyText}>暫時未偵測到任何同步衝突</p> : (
-                    <div style={S.bookingList}>
-                      {syncConflictLog.slice(0, 30).map((c, i) => (
-                        <div key={i} style={S.bookingItem}>
-                          <div style={{ flex: 1 }}>
-                            <div style={S.bookingTime}>{c.at}</div>
-                            {c.keysLocal.length > 0 && <div style={{ fontSize: 12, color: "#6BCB77", marginTop: 4 }}>用咗本機版本：{c.keysLocal.join("、")}</div>}
-                            {c.keysRemote.length > 0 && <div style={{ fontSize: 12, color: "#4ECDC4", marginTop: 2 }}>保留咗雲端版本（第二部裝置嘅改動）：{c.keysRemote.join("、")}</div>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {syncConflictLog.length > 30 && <p style={{ ...S.assistHint, marginTop: 8 }}>淨係顯示最近30筆，總共記錄咗{syncConflictLog.length}筆。</p>}
-                </div>
-              </>
-            )}
-
-            {currentUser.role === "admin" && (
-              <>
-                <h2 id="set-purge" style={{ ...S.sectionTitle, marginTop: 28 }}>清理歷史資料</h2>
-                <div style={{ ...S.formCard }}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>Supabase雲端係成份JSON一齊儲存，長年累月會愈存愈大（簽名圖片係主要嘅size大戶）。呢度可以批量剷走指定日期或之前嘅歷史記錄（bookings、取消/購買/包場/飲品/簽名等），釋放空間。教練帳戶、目前有效Pass時數唔會受影響。</p>
-                  <Field label="清走呢個日期（包括）或之前嘅記錄"><input style={S.input} type="date" value={purgeDate} onChange={(e) => setPurgeDate(e.target.value)} /></Field>
-                  {purgeDate && (() => {
-                    const c = purgeCountsBefore(purgeDate);
-                    return c.total === 0
-                      ? <p style={S.emptyText}>呢個日期之前冇任何記錄</p>
-                      : (
-                        <div style={{ ...S.purchaseBreakdown }}>
-                          <div style={{ fontSize: 13, color: "#ccc" }}>會剷走：</div>
-                          {c.bookingCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.bookingCount} 個bookings時段</div>}
-                          {c.cancelCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.cancelCount} 筆取消記錄</div>}
-                          {c.purchaseCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.purchaseCount} 筆購買時數記錄</div>}
-                          {c.charterCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.charterCount} 筆包場/小組記錄</div>}
-                          {c.drinkCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.drinkCount} 筆飲品記錄</div>}
-                          {c.passUsageCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.passUsageCount} 筆Pass使用記錄</div>}
-                          {c.studentPurchaseCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.studentPurchaseCount} 筆學生購買記錄</div>}
-                          {c.signatureCount > 0 && <div style={{ fontSize: 12, color: "#999" }}>・{c.signatureCount} 張簽名圖片</div>}
-                        </div>
-                      );
-                  })()}
-                  <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff", marginTop: 10 }} disabled={!purgeDate || purgeCountsBefore(purgeDate)?.total === 0} onClick={() => setPurgeModal(true)}>🗑️ 清理歷史資料</button>
-                </div>
-              </>
-            )}
-
-            {currentUser.role === "admin" && (
-              <>
-                <h2 id="set-reset" style={{ ...S.sectionTitle, marginTop: 28 }}>重設資料</h2>
-                <div style={S.formCard}>
-                  <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>清除呢部裝置嘅所有資料，回復至初始狀態。建議先匯出備份。此動作無法復原。</p>
-                  <button style={{ ...S.loginBtn, background: "#FF6B6B", color: "#fff" }} onClick={() => setResetModal(true)}>🗑️ 重設所有資料</button>
-                </div>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -2977,25 +3037,25 @@ export default function App() {
         );
       })()}
       <div style={S.tabRow}>
-        <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}><span style={S.tabIcon}>📅</span><span>預約場地</span></button>
+        <button style={view === "calendar" ? S.tabActive : S.tab} onClick={() => setView("calendar")}><span style={S.tabIcon}><Icon name="calendar" /></span><span>預約場地</span></button>
         <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}>
           <span style={{ position: "relative" }}>
-            <span style={S.tabIcon}>📋</span>
+            <span style={S.tabIcon}><Icon name="clipboard" /></span>
             {myBookingsThisMonthCount > 0 && <span style={S.badge}>{myBookingsThisMonthCount}</span>}
           </span>
           <span>我的預約</span>
         </button>
         <button style={view === "home" ? S.tabActive : S.tab} onClick={() => setView("home")}>
           <span style={{ position: "relative" }}>
-            <span style={S.tabIcon}>🏠</span>
+            <span style={S.tabIcon}><Icon name="home" /></span>
             {isCoach && (retroBookingNotices.some((n) => n.coachId === currentUser.id && !n.read) || filmingNotices.some((n) => n.coachId === currentUser.id && !n.read)) && (
               <span style={{ position: "absolute", top: -2, right: -4, width: 8, height: 8, borderRadius: "50%", background: "#FFB347" }} />
             )}
           </span>
           <span>首頁</span>
         </button>
-        <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}><span style={S.tabIcon}>👥</span><span>學生管理</span></button>
-        <button style={view === "other" ? S.tabActive : S.tab} onClick={() => setView("other")}><span style={S.tabIcon}>⚙️</span><span>其他</span></button>
+        <button style={view === "income" ? S.tabActive : S.tab} onClick={() => setView("income")}><span style={S.tabIcon}><Icon name="users" /></span><span>學生管理</span></button>
+        <button style={view === "other" ? S.tabActive : S.tab} onClick={() => setView("other")}><span style={S.tabIcon}><Icon name="settings" /></span><span>其他</span></button>
       </div>
 
       {view === "home" && (
