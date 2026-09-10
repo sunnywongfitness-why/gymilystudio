@@ -49,7 +49,7 @@ export default function App() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [weekViewMode, setWeekViewMode] = useState("fixed"); // fixed（星期一至日） | rolling（以今日做第一日）— 第3項：兩個模式並存，一鍵切換
   const [calScale, setCalScale] = useState(() => loadCalScale());
-  const [myBookingsView, setMyBookingsView] = useState("list"); // list | calendar
+  const [myBookingsView, setMyBookingsView] = useState("list"); // list | upcoming | completed | cancelled
   const [myBookingsSortMode, setMyBookingsSortMode] = useState("newest"); // newest | closest（距今日最近排最頂）
   const [studentDrafts, setStudentDrafts] = useState({}); // 學生「每堂收費」／「剩餘堂數」輸入緊嘅暫存字串，等撳delete可以留空唔會即刻變返0，key: `${name}_${field}`
   const updateCalScale = (v) => { setCalScale(v); saveCalScale(v); };
@@ -146,6 +146,32 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 3-way merge 專門處理 bookings：唔可以淨係睇「成個bookings key改咗未」就決定用邊份——
+  // 因為「自動扣學生堂數」嗰個useEffect（§169附近）會不定時、同取消/新booking呢類操作完全無關咁郁一郁bookings入面嘅autoDeducted flag，
+  // 令bookings成個key睇落「本機改咗」，如果淨係做key-level merge，就會將呢個「郁咗」誤判做要保留本機版本，連埋第二部裝置啱啱先取消/新增嘅booking都一齊冚走。
+  // 改做逐個 date_time slot 比較：邊個slot本機真係改咗（同上次同步唔同）先用本機，冇改過嘅slot一律用返雲端最新版本（保留第二部裝置嘅改動，包括「呢個slot俾人取消咗、雲端已經冇咗」嘅情況）。
+  const mergeBookings = (remoteBookings, localBookings, lastSyncedBookings) => {
+    const merged = {};
+    const allKeys = new Set([...Object.keys(remoteBookings || {}), ...Object.keys(localBookings || {})]);
+    allKeys.forEach((key) => {
+      const remoteArr = remoteBookings ? remoteBookings[key] : undefined;
+      const localArr = localBookings ? localBookings[key] : undefined;
+      const lastArr = lastSyncedBookings ? lastSyncedBookings[key] : undefined;
+      if (remoteArr === undefined && localArr === undefined) return;
+      if (remoteArr === undefined) {
+        // 雲端冇呢個slot：如果上次同步都已經冇（即係本機啱啱先新增嘅），保留本機；
+        // 如果上次同步有（即係第二部裝置攞走咗/取消咗），尊重雲端，唔好搬本機舊版本返去
+        if (lastArr === undefined) merged[key] = localArr;
+        return;
+      }
+      if (localArr === undefined) { merged[key] = remoteArr; return; }
+      const remoteChanged = stableStringify(remoteArr) !== stableStringify(lastArr);
+      const localChanged = stableStringify(localArr) !== stableStringify(lastArr);
+      merged[key] = (localChanged && !remoteChanged) ? localArr : remoteArr;
+    });
+    return merged;
+  };
+
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
     const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates };
@@ -159,10 +185,31 @@ export default function App() {
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      lastSyncedRef.current = s;
       setSyncState("connecting");
-      const ok = await cloudSave(bundle);
-      setSyncState(ok ? "synced" : "error");
+      // 寫入前先重新讀一次雲端而家嘅內容：如果同「我哋上次同步嗰刻」已經唔一樣，
+      // 即係話呢段時間內有第二部裝置都寫入過——唔可以再盲目成份bundle覆寫，會整走人哋嘅改動（lost update）。
+      // 一般key：逐個top-level key比對，邊個key我哋本機真係改過（同上次同步嗰刻嘅值唔一樣），先用返本機嘅；
+      // 冇改過嘅key，一律保留返雲端最新版本，等第二部裝置嘅改動唔會被冚走。
+      // bookings：用返上面 mergeBookings 做slot-level嘅3-way merge，避免自動扣堂效果嘅雜訊誤觸發key-level覆寫。
+      const freshRemote = await cloudLoad();
+      const freshS = freshRemote ? stableStringify(freshRemote) : null;
+      let toSave = bundle;
+      if (freshRemote && freshS !== lastSyncedRef.current) {
+        let lastSynced = {};
+        try { lastSynced = JSON.parse(lastSyncedRef.current) || {}; } catch (e) { /* ignore */ }
+        const merged = { ...freshRemote };
+        Object.keys(bundle).forEach((key) => {
+          if (key === "bookings") { merged.bookings = mergeBookings(freshRemote.bookings, bundle.bookings, lastSynced.bookings); return; }
+          const localChanged = stableStringify(bundle[key]) !== stableStringify(lastSynced[key]);
+          if (localChanged) merged[key] = bundle[key];
+        });
+        toSave = merged;
+        applyBundle(merged); // 本機都要即刻同步返merge之後嘅結果，等第二部裝置嗰邊嘅改動都反映落本機
+      }
+      const finalS = stableStringify(toSave);
+      const ok = await cloudSave(toSave);
+      if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
+      else { setSyncState("error"); } // 失敗唔更新lastSyncedRef，等落次有變動會自然重試
     }, 500);
   }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates]);
 
@@ -1425,14 +1472,23 @@ export default function App() {
     });
   });
   myBookings.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
+  const myBookingsThisMonthCount = myBookings.filter((b) => monthKey(b.date) === monthKey(formatDate(new Date()))).length;
+  // 「未完成」／「已完成」分頁：開始時間已過(hoursUntil<0)即係「已完成」，同app其他地方嘅isPast定義一致
+  const myBookingsFilteredByStatus = (() => {
+    if (myBookingsView !== "upcoming" && myBookingsView !== "completed") return myBookings;
+    const nowMs2 = Date.now();
+    const startMs2 = (b) => new Date(`${b.date}T${b.start}:00`).getTime();
+    return myBookings.filter((b) => myBookingsView === "upcoming" ? startMs2(b) >= nowMs2 : startMs2(b) < nowMs2);
+  })();
+
   // 「距今日最近」排序：未完成嘅（包括今日仲未開始嘅）優先，由近到遠；已完成嘅（開始時間已過）全部擺到最底，由最近至最舊
   // 修正前 bug：淨係比較日期（唔理時間），令今日已完成嘅堂都當「未來」跑咗上最頂
   const myBookingsSorted = (() => {
-    if (myBookingsSortMode !== "closest") return myBookings;
+    if (myBookingsSortMode !== "closest") return myBookingsFilteredByStatus;
     const startMs = (b) => new Date(`${b.date}T${b.start}:00`).getTime();
     const nowMs = Date.now();
-    const upcoming = myBookings.filter((b) => startMs(b) >= nowMs).sort((a, b) => startMs(a) - startMs(b));
-    const done = myBookings.filter((b) => startMs(b) < nowMs).sort((a, b) => startMs(b) - startMs(a));
+    const upcoming = myBookingsFilteredByStatus.filter((b) => startMs(b) >= nowMs).sort((a, b) => startMs(a) - startMs(b));
+    const done = myBookingsFilteredByStatus.filter((b) => startMs(b) < nowMs).sort((a, b) => startMs(b) - startMs(a));
     return [...upcoming, ...done];
   })();
 
@@ -2882,7 +2938,7 @@ export default function App() {
         <button style={view === "myBookings" ? S.tabActive : S.tab} onClick={() => setView("myBookings")}>
           <span style={{ position: "relative" }}>
             <span style={S.tabIcon}>📋</span>
-            {myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}
+            {myBookingsThisMonthCount > 0 && <span style={S.badge}>{myBookingsThisMonthCount}</span>}
           </span>
           <span>我的預約</span>
         </button>
@@ -3205,10 +3261,12 @@ export default function App() {
             <h2 style={S.sectionTitle}>我的預約記錄</h2>
             <div style={S.segRow}>
               <button style={myBookingsView === "list" ? S.segActive : S.seg} onClick={() => setMyBookingsView("list")}>📋 列表</button>
+              <button style={myBookingsView === "upcoming" ? S.segActive : S.seg} onClick={() => setMyBookingsView("upcoming")}>⏳ 未完成</button>
+              <button style={myBookingsView === "completed" ? S.segActive : S.seg} onClick={() => setMyBookingsView("completed")}>✅ 已完成</button>
               <button style={myBookingsView === "cancelled" ? S.segActive : S.seg} onClick={() => setMyBookingsView("cancelled")}>🗑️ 已取消</button>
             </div>
           </div>
-          {myBookingsView === "list" && (
+          {myBookingsView !== "cancelled" && (
             <div style={{ ...S.segRow, marginTop: 8 }}>
               <button style={myBookingsSortMode === "newest" ? S.segActive : S.seg} onClick={() => setMyBookingsSortMode("newest")}>新到舊</button>
               <button style={myBookingsSortMode === "closest" ? S.segActive : S.seg} onClick={() => setMyBookingsSortMode("closest")}>距今日最近</button>
@@ -3238,7 +3296,7 @@ export default function App() {
                 <p style={S.assistHint}>※ 顯示所有同你有關嘅取消記錄，唔理係你自己、Admin，定係副管理員取消嘅。</p>
               </div>
             );
-          })() : myBookingsSorted.length === 0 ? <p style={S.emptyText}>你還未有預約</p> : (
+          })() : myBookingsSorted.length === 0 ? <p style={S.emptyText}>{myBookingsView === "completed" ? "暫無已完成嘅預約" : myBookingsView === "upcoming" ? "暫無未完成嘅預約" : "你還未有預約"}</p> : (
             <div style={S.bookingList}>
               {myBookingsSorted.map(({ date, start, hours, type, charterType, coachName, students, signatures, createdAt, bookedBy }, i) => {
                 const hrs = hoursUntil(date, start);
