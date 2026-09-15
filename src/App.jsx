@@ -325,6 +325,7 @@ export default function App() {
   const [editCoach, setEditCoach] = useState(null);
   const [addCreditModal, setAddCreditModal] = useState(null);
   const [adjustUsedModal, setAdjustUsedModal] = useState(null); // {coachId, used, note} 手動調整已用時數（處理歷史誤差，例如duo退款前後制度唔一致）
+  const [packageUsageModal, setPackageUsageModal] = useState(null); // coachId，借用現有purchaseFifoStatus()做純顯示，唔改動任何扣時數邏輯
   const [editDrinkSaleModal, setEditDrinkSaleModal] = useState(null); // 修改飲品訂單內容
   const [delDrinkSaleModal, setDelDrinkSaleModal] = useState(null); // 待剷除嘅飲品訂單
   const [adminTab, setAdminTab] = useState(() => initialSession?.adminTab || "overview");
@@ -657,6 +658,13 @@ export default function App() {
     const entry = { id: "cl" + Date.now() + "-" + Math.random().toString(36).slice(2), task: taskKey, coachId: currentUser.id, coachName: currentUser.name, date: formatDate(new Date()), at: nowStamp() };
     setCleaningLog((prev) => [entry, ...prev]);
     showToast(`已記錄：${label}`);
+  };
+  const updateCleaningEntryTask = (id, newTask) => {
+    setCleaningLog((prev) => prev.map((r) => r.id === id ? { ...r, task: newTask } : r));
+  };
+  const deleteCleaningEntry = (id) => {
+    setCleaningLog((prev) => prev.filter((r) => r.id !== id));
+    showToast("已刪除記錄");
   };
 
   // ---- 文本範本庫（第10項重構）：admin可自由編輯/新增/刪除範本，撳「發送文本」揀教練+範本，自動代入{{教練名}}，時數留喺預覽度手動填 ----
@@ -2071,6 +2079,7 @@ export default function App() {
                   <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 時數</button>
                   <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00" })}>⚠️ 提醒補book</button>
                   <button style={S.smallBtn} onClick={() => setAdjustUsedModal({ coachId: c.id, used: c.used, note: "" })}>🔧 調整已用時數</button>
+                  <button style={S.smallBtn} onClick={() => setPackageUsageModal(c.id)}>📦 Package使用情況</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
                 </div>
@@ -2654,6 +2663,36 @@ export default function App() {
           </div></div>
         )}
 
+        {packageUsageModal && (() => {
+          const coach = getCoach(packageUsageModal);
+          const batches = purchaseFifoStatus(packageUsageModal);
+          return (
+            <div style={S.modalOverlay}><div style={S.modal}>
+              <h3 style={S.modalTitle}>{coach?.name} · Package使用情況</h3>
+              <p style={S.assistHint}>按購買先後，模擬FIFO分配（舊嘅先用）計出每筆嘅已用/剩餘。呢個係推算顯示，唔代表實際扣時數一定跟呢個分法（現時扣時數制度係單一池，見「方案A」設計）。</p>
+              {batches.length === 0 ? <p style={S.emptyText}>暫無購買記錄</p> : (
+                <div style={{ marginTop: 10 }}>
+                  {batches.map((b) => (
+                    <div key={b.id} style={{ padding: "10px 0", borderBottom: "1px solid #222" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                        <span>{b.date}{b.passType ? `（${b.passType === "personal" ? "個人證" : "彈性證"}）` : ""}</span>
+                        <span style={{ color: "#4ECDC4", fontWeight: 700 }}>{b.qty} 小時</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#999", marginTop: 4 }}>
+                        <span>已用 {b.consumed} 小時　剩 {b.remaining} 小時</span>
+                        {b.expiryDate && <span>有效期至 {b.expiryDate}</span>}
+                      </div>
+                      <div style={{ height: 5, background: "#222", borderRadius: 3, marginTop: 6, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${b.qty > 0 ? Math.min(100, (b.consumed / b.qty) * 100) : 0}%`, background: b.remaining > 0 ? "#4ECDC4" : "#555" }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button style={{ ...S.modalCancel, width: "100%", marginTop: 16 }} onClick={() => setPackageUsageModal(null)}>關閉</button>
+            </div></div>
+          );
+        })()}
 
         {editDateRec && (
           <div style={S.modalOverlay}><div style={S.modal}>
@@ -3017,9 +3056,12 @@ export default function App() {
             {cleaningLog.length === 0 ? <p style={S.emptyText}>暫無記錄</p> : (
               <div style={{ maxHeight: 220, overflowY: "auto" }}>
                 {cleaningLog.slice(0, 40).map((r) => (
-                  <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e" }}>
-                    <span>{CLEANING_TASKS.find((t) => t.key === r.task)?.label || r.task} · {r.coachName}</span>
-                    <span>{r.date}</span>
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
+                    <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
+                      {CLEANING_TASKS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                    </select>
+                    <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
+                    <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>
                   </div>
                 ))}
               </div>
@@ -3793,9 +3835,12 @@ export default function App() {
           {cleaningLog.length === 0 ? <p style={S.emptyText}>暫無記錄</p> : (
             <div style={{ maxHeight: 220, overflowY: "auto" }}>
               {cleaningLog.slice(0, 40).map((r) => (
-                <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e" }}>
-                  <span>{CLEANING_TASKS.find((t) => t.key === r.task)?.label || r.task} · {r.coachName}</span>
-                  <span>{r.date}</span>
+                <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
+                  <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
+                    {CLEANING_TASKS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                  </select>
+                  <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
+                  <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>
                 </div>
               ))}
             </div>
