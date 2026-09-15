@@ -1,6 +1,6 @@
 // 純函數 helper：日期/時間/堂數計算、登入狀態、雲端同步比對等
 import { LS_KEY, SESSION_KEY, CALSCALE_KEY, ADMIN_TAB_KEYS } from "./constants.js";
-import { DEFAULT_COACHES, DEFAULT_SUBADMINS, CLOSED_DAYS } from "./brand.js";
+import { DEFAULT_COACHES, DEFAULT_SUBADMINS, CLOSED_DAYS, BRAND_NAME } from "./brand.js";
 import { S } from "./styles.js";
 
 export const loadStore = () => {
@@ -135,6 +135,127 @@ export function slotIndex(time) {
   const [h, m] = time.split(":").map(Number);
   return (h - 7) * 4 + m / 15;
 }
+// ---- 財政年度（4月1日至3月31日，跟審計師/稅局個basis period，唔係calendar year）----
+// 用「開始年份」表示一個財政年度：例如 2025-04-01～2026-03-31 呢個年度，開始年份係 2025
+export function fiscalYearOf(dateStr) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return m >= 4 ? y : y - 1;
+}
+export const fiscalYearLabel = (startYear) => `${startYear}/${String(startYear + 1).slice(2)}`;
+export const fiscalYearRange = (startYear) => ({ start: `${startYear}-04-01`, end: `${startYear + 1}-03-31` });
+
+// ---- 支出憑證編號：EXP-YYYYMMDD-序號，同日第二筆起編02、03...（跟返purchaseLog同日排序嘅做法，見§7）----
+// 淨係喺新增嗰刻計一次，之後編輯呢筆記錄唔會再變號；刪除舊記錄會留低缺口，屬預期行為（唔重編號）
+export function nextVoucherNo(expenseLog, dateStr) {
+  const ymd = dateStr.replaceAll("-", "");
+  const sameDay = (expenseLog || []).filter((r) => r.voucherNo && r.voucherNo.startsWith(`EXP-${ymd}-`));
+  return `EXP-${ymd}-${String(sameDay.length + 1).padStart(2, "0")}`;
+}
+
+// ---- 支出憑證圖：Canvas疊字（§3.2定案版）----
+// 用瀏覽器原生 Canvas 2D 文字渲染，唔使好似Python mockup環境咁手動載入CJK字體——
+// 現代瀏覽器嘅 fillText 本身就會用系統字體做per-glyph fallback，中文一樣render得到，唔使特別處理
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+// measureOnly=true 淨係計算需要嘅高度，唔真係畫——等call方可以先知卡片幾高，先啱啱好貼喺底部
+function layoutVoucherCard(ctx, record, x, yTop, w, measureOnly) {
+  const draw = !measureOnly;
+  const pad = Math.round(w * 0.07);
+  const titleSize = Math.max(13, Math.round(w * 0.052));
+  const amountSize = Math.max(20, Math.round(w * 0.11));
+  const lineSize = Math.max(11, Math.round(w * 0.042));
+  let cy = yTop + pad;
+  const cx = x + pad;
+  const innerW = w - pad * 2;
+
+  if (draw) {
+    ctx.fillStyle = "#4ECDC4";
+    ctx.beginPath(); ctx.arc(cx + titleSize * 0.35, cy + titleSize * 0.35, titleSize * 0.22, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.textBaseline = "top"; ctx.font = `700 ${titleSize}px sans-serif`;
+    ctx.fillText(`${BRAND_NAME} 支出憑證`, cx + titleSize * 0.9, cy);
+  }
+  cy += titleSize * 1.7;
+
+  if (draw) { ctx.fillStyle = "#4ECDC4"; ctx.font = `800 ${amountSize}px sans-serif`; ctx.fillText(`HKD $${record.amount.toLocaleString()}`, cx, cy); }
+  cy += amountSize * 1.35;
+
+  if (draw) { ctx.font = `400 ${lineSize}px sans-serif`; ctx.fillStyle = "#ddd"; }
+  const line = (label, value) => { if (draw) ctx.fillText(`${label}：${value}`, cx, cy); cy += lineSize * 1.6; };
+  line("類別", record.category);
+  line("購買日期", record.date);
+  line("代付人", record.payer);
+  // ⚠️歸還狀態（未歸還/已歸還）刻意唔顯示喺憑證圖度（見§3.2）——呢張圖淨係做「呢筆錢使咗」嘅單據，唔記錄內部欠款狀態
+
+  if (record.items.length > 1) {
+    cy += lineSize * 0.3;
+    if (draw) { ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + innerW, cy); ctx.stroke(); }
+    cy += lineSize * 0.7;
+    if (draw) { ctx.fillStyle = "#aaa"; ctx.font = `600 ${Math.round(lineSize * 0.9)}px sans-serif`; ctx.fillText("物品明細", cx, cy); }
+    cy += lineSize * 1.4;
+    if (draw) { ctx.font = `400 ${Math.round(lineSize * 0.92)}px sans-serif`; ctx.fillStyle = "#ccc"; }
+    record.items.forEach((it) => { if (draw) ctx.fillText(`${it.name}　$${it.amount.toLocaleString()}`, cx, cy); cy += lineSize * 1.4; });
+  }
+
+  cy += lineSize * 0.5;
+  if (draw) { ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + innerW, cy); ctx.stroke(); }
+  cy += lineSize * 0.7;
+  if (draw) { ctx.fillStyle = "#888"; ctx.font = `400 ${Math.round(lineSize * 0.8)}px sans-serif`; ctx.fillText(record.voucherNo, cx, cy); }
+  cy += lineSize * 1.3;
+
+  return (cy - yTop) + pad;
+}
+// 生成單張支出憑證圖（JPEG blob）：有相就疊喺相右下角，冇相就用返個深色底做成張獨立嘅卡片圖。
+// 呢個function純粹喺瀏覽器本機運算輸出blob，唔會寫入任何App狀態，call方負責觸發download，全程唔會上傳/存落Supabase（見§3.1）
+export function buildExpenseVoucherBlob(record, receiptFile) {
+  const render = (receiptImg) => new Promise((resolve, reject) => {
+    const canvas = document.createElement("canvas");
+    const hasPhoto = !!receiptImg;
+    let cw, ch;
+    if (hasPhoto) {
+      const MAXLONG = 1600;
+      const { naturalWidth: iw, naturalHeight: ih } = receiptImg;
+      const scale = Math.min(1, MAXLONG / Math.max(iw, ih));
+      cw = Math.round(iw * scale); ch = Math.round(ih * scale);
+    } else { cw = 900; ch = 1150; }
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext("2d");
+    if (hasPhoto) ctx.drawImage(receiptImg, 0, 0, cw, ch);
+    else { ctx.fillStyle = "#0f0f0f"; ctx.fillRect(0, 0, cw, ch); }
+
+    const margin = Math.round(cw * (hasPhoto ? 0.035 : 0.06));
+    const cardW = hasPhoto ? Math.max(220, Math.min(cw * 0.5, cw - margin * 2)) : cw - margin * 2;
+    const cardH = layoutVoucherCard(ctx, record, 0, 0, cardW, true);
+    const cardX = cw - margin - cardW;
+    const cardY = ch - margin - cardH;
+    ctx.fillStyle = "rgba(15,25,26,0.86)";
+    roundRectPath(ctx, cardX, cardY, cardW, cardH, Math.round(cardW * 0.03));
+    ctx.fill();
+    layoutVoucherCard(ctx, record, cardX, cardY, cardW, false);
+
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("toBlob失敗")), "image/jpeg", 0.9);
+  });
+
+  if (!receiptFile) return render(null);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => render(img).then(resolve, reject);
+      img.onerror = () => render(null).then(resolve, reject); // 相讀取失敗就後備做空白憑證，唔好整個功能卡死
+      img.src = ev.target.result;
+    };
+    reader.onerror = () => render(null).then(resolve, reject);
+    reader.readAsDataURL(receiptFile);
+  });
+}
+
 // 將一個 booking 嘅顯示內容拆做幾行：教練名/類型、（學生名）、開始時間 —— 每行會分配落唔同嘅實際格仔
 export function buildEntryLines(v, isTrial, coachObj, isOwner) {
   const lines = [];

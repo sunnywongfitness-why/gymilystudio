@@ -38,6 +38,14 @@ export const DEFAULT_SUBADMINS = [
 ];
 export const DEFAULT_COACHES = [];
 
+// ---- 支出類別（跟返審計師「Detailed income statement」嘅實際分類，唔好自己諗新嘅——等會計師攞到報表可以直接對得上，唔使重新歸類）----
+// 「交通/運輸」同「旅費」喺原始審計文件係分開兩個類別（前者屬Cost of services，後者屬Admin expenses），故意唔合併
+export const EXPENSE_CATEGORIES = [
+  "廣告及推廣", "消耗品及工具", "訓練器材", "交通／運輸", "Audit Fee", "商業登記費",
+  "公司成立費", "電費", "伙食", "印刷及文具", "租金", "維修", "秘書服務費",
+  "雜項開支", "電話及上網", "旅費",
+];
+
 // ---- 教練 Onboarding（第10項）----
 export const BANK_NAME = "BEA";
 export const FPS_ID = "130208986";
