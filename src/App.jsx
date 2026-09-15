@@ -12,12 +12,14 @@ import {
   DEFAULT_ADMIN_PASSWORD, COMPANY_LEGAL_NAME, COMPANY_ADDRESS_LINES, INVOICE_THEME_RGB, INVOICE_PREFIX,
   PASS_HOURLY_RATE, PERSONAL_PASS_HOURS, PERSONAL_PASS_MONTHS, FLEXIBLE_PASS_HOURS, FLEXIBLE_PASS_MONTHS,
   retroactiveBookingReminderText, suspiciousCancelText, drinkOrderNoticeText, DEFAULT_TEXT_TEMPLATES,
+  EXPENSE_CATEGORIES,
 } from "./brand.js";
 import {
   persisted, loadSession, saveSession, clearSession, loadCalScale, saveCalScale,
   stableStringify, initialSession, isWholeVenue, rentalShort, rentalFull,
   isClosedDay, getDaysOfWeek, formatDate, isTodayDate, formatDay, monthKey,
   hoursUntil, addMinutes, slotsFor, slotIndex, buildEntryLines, addDaysToDate, addMonthsToDate, coachColorFromId, actorLabel, bookedByLabel, nowStamp, closedDayMessage,
+  fiscalYearOf, fiscalYearLabel, fiscalYearRange, nextVoucherNo, buildExpenseVoucherBlob,
 } from "./helpers.js";
 import { S } from "./styles.js";
 import { EditCoachModal, Field, SignaturePad, Header, Toast } from "./components.jsx";
@@ -114,6 +116,14 @@ export default function App() {
   const [sendTextPreview, setSendTextPreview] = useState("");
   const [drinkSalesLog, setDrinkSalesLog] = useState(() => persisted("drinkSalesLog", [])); // {id, coachId, coachName, items:[{productId,name,price,qty}], amount, date, time} 飲品銷售記錄，掛落教練account，唔追蹤買家（學生）身份
   const [adjustLog, setAdjustLog] = useState(() => persisted("adjustLog", [])); // {id, coachId, coachName, before, after, note, actorTag, at} 手動調整已用時數嘅記錄
+  const [expenseLog, setExpenseLog] = useState(() => persisted("expenseLog", [])); // {id, date, category, payer, items:[{name,amount}], amount, status(unpaid/paid), voucherNo, addedBy, at} 公司支出記錄（財務功能，2026-09新增）
+  const [expenseModal, setExpenseModal] = useState(null); // 新增/編輯支出表格暫存：{ id, date, category, payer, items, status, receiptDataUrl }
+  const [delExpenseModal, setDelExpenseModal] = useState(null); // 待刪除嘅支出記錄
+  const [voucherModal, setVoucherModal] = useState(null); // 準備生成憑證嘅支出記錄
+  const [financeReportModal, setFinanceReportModal] = useState(null); // "monthly" | "annual" | null，匯出報表揀月份/財政年度嘅彈窗
+  const [reportMonth, setReportMonth] = useState(() => monthKey(formatDate(new Date())));
+  const [reportFYStart, setReportFYStart] = useState(() => fiscalYearOf(formatDate(new Date())));
+  const [voucherReceiptFile, setVoucherReceiptFile] = useState(null); // 生成憑證彈窗暫存嘅單據相檔案，純本機用，唔存落state persist
   const [drinkCart, setDrinkCart] = useState({}); // { [productId]: qty } 揀緊嘅支數，未確認
   const [drinkQrModal, setDrinkQrModal] = useState(null); // { items, amount } 撳「下一步」之後顯示收款QR畀學生睇
   const [newDrinkForm, setNewDrinkForm] = useState({ name: "", price: "" }); // admin新增產品用嘅暫存輸入
@@ -155,6 +165,7 @@ export default function App() {
     if (d.cleaningLog !== undefined) setCleaningLog(d.cleaningLog);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
+    if (d.expenseLog !== undefined) setExpenseLog(d.expenseLog);
   };
 
   // 首次載入：雲端模式由雲端讀取（若雲端空白則上載目前本機資料），並訂閱即時變更
@@ -168,7 +179,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -213,9 +224,38 @@ export default function App() {
     return { merged, localCount, remoteCount };
   };
 
+  // 通用嘅「逐筆記錄按id」3-way merge，畀expenseLog（同其他未來想加嘅高頻log）用：
+  // 同 mergeBookings 一樣嘅道理——唔可以淨係睇「成個array改咗未」就決定用邊份，
+  // 因為兩個admin/副管理員可能真係會撞到同一時間各自新增緊唔同筆支出，粗略per-key merge會冚走其中一份。
+  // 逐個id比較：邊筆本機真係改咗（同上次同步唔同）先用本機，冇改過嘅一律用返雲端最新版本。
+  const mergeLogById = (remoteList, localList, lastList) => {
+    const toMap = (list) => { const m = {}; (list || []).forEach((r) => { if (r && r.id !== undefined) m[r.id] = r; }); return m; };
+    const remoteMap = toMap(remoteList), localMap = toMap(localList), lastMap = toMap(lastList);
+    const merged = {};
+    let localCount = 0, remoteCount = 0;
+    const allIds = new Set([...Object.keys(remoteMap), ...Object.keys(localMap)]);
+    allIds.forEach((id) => {
+      const r = remoteMap[id], l = localMap[id], last = lastMap[id];
+      if (r === undefined && l === undefined) return;
+      if (r === undefined) {
+        // 雲端冇呢筆：上次同步都已經冇（本機啱啱先新增）就保留本機；上次同步有（第二部裝置刪走咗）就尊重雲端
+        if (last === undefined) { merged[id] = l; localCount++; }
+        return;
+      }
+      if (l === undefined) { merged[id] = r; remoteCount++; return; }
+      const remoteChanged = stableStringify(r) !== stableStringify(last);
+      const localChanged = stableStringify(l) !== stableStringify(last);
+      if (localChanged && !remoteChanged) { merged[id] = l; localCount++; }
+      else { merged[id] = r; if (remoteChanged) remoteCount++; }
+    });
+    // 保持「新到舊」排序（跟其他log嘅prepend慣例），用 at 時間戳排；冇 at 就當最舊
+    const list = Object.values(merged).sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+    return { merged: list, localCount, remoteCount };
+  };
+
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -251,6 +291,13 @@ export default function App() {
             if (r.remoteCount > 0) keysRemote.push(`bookings(${r.remoteCount}個時段)`);
             return;
           }
+          if (key === "expenseLog") {
+            const r = mergeLogById(freshRemote.expenseLog, bundle.expenseLog, lastSynced.expenseLog);
+            merged.expenseLog = r.merged;
+            if (r.localCount > 0) keysLocal.push(`expenseLog(${r.localCount}筆)`);
+            if (r.remoteCount > 0) keysRemote.push(`expenseLog(${r.remoteCount}筆)`);
+            return;
+          }
           const localChanged = stableStringify(bundle[key]) !== stableStringify(lastSynced[key]);
           if (localChanged) { merged[key] = bundle[key]; keysLocal.push(key); }
           else if (stableStringify(freshRemote[key]) !== stableStringify(lastSynced[key])) keysRemote.push(key);
@@ -268,7 +315,7 @@ export default function App() {
       if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
       else { setSyncState("error"); } // 失敗唔更新lastSyncedRef，等落次有變動會自然重試
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
   // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
@@ -788,6 +835,63 @@ export default function App() {
   const deleteDrinkSale = (id) => {
     setDrinkSalesLog((prev) => prev.filter((s) => s.id !== id));
     showToast("已剷除飲品訂單");
+  };
+
+  // ---- 支出記錄（財務功能，2026-09新增）----
+  const saveExpense = (form) => {
+    const items = (form.items || []).map((it) => ({ name: (it.name || "").trim(), amount: Number(it.amount) || 0 })).filter((it) => it.name || it.amount);
+    if (items.length === 0) { showToast("最少要填一項物品", "error"); return false; }
+    const amount = items.reduce((s, it) => s + it.amount, 0);
+    if (amount <= 0) { showToast("金額要大於0", "error"); return false; }
+    if (!form.category) { showToast("請揀類別", "error"); return false; }
+    if (!form.payer) { showToast("請揀代付人", "error"); return false; }
+    if (form.id) {
+      setExpenseLog((prev) => prev.map((r) => r.id === form.id
+        ? { ...r, date: form.date, category: form.category, payer: form.payer, items, amount, status: form.status }
+        : r));
+      showToast("已更新支出記錄");
+    } else {
+      const entry = {
+        id: "exp" + Date.now() + "-" + Math.random().toString(36).slice(2),
+        date: form.date, category: form.category, payer: form.payer, items, amount,
+        status: form.status || "unpaid",
+        voucherNo: nextVoucherNo(expenseLog, form.date),
+        addedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin",
+        at: nowStamp(),
+      };
+      setExpenseLog((prev) => [entry, ...prev]);
+      showToast("已新增支出記錄");
+    }
+    return true;
+  };
+  const deleteExpense = (id) => {
+    setExpenseLog((prev) => prev.filter((r) => r.id !== id));
+    showToast("已刪除支出記錄");
+  };
+  const toggleExpenseStatus = (id) => {
+    setExpenseLog((prev) => prev.map((r) => r.id === id ? { ...r, status: r.status === "paid" ? "unpaid" : "paid" } : r));
+  };
+  // 代付人可選名單：教練 + 副管理員 + Admin本人（跟§2.2：唔係自由文字，dropdown揀）
+  const expensePayerOptions = () => {
+    const names = [];
+    coaches.forEach((c) => names.push(c.name));
+    subAdmins.forEach((s) => names.push(s.name));
+    names.push("管理員");
+    return Array.from(new Set(names));
+  };
+  // 生成並即刻download支出憑證JPEG（純本機運算，唔會上傳雲端，見§3.1/§3.3）
+  const downloadExpenseVoucher = async (record, receiptFile) => {
+    try {
+      const blob = await buildExpenseVoucherBlob(record, receiptFile);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${record.voucherNo}.jpg`;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast("已生成憑證，請查看下載");
+    } catch (e) {
+      showToast("生成憑證失敗，請重試", "error");
+    }
   };
   // Admin手動調整教練「已用時數」：處理歷史誤差（例如duo扣減公式改過，舊交易退款金額對唔上），連埋備註方便追溯
   const adjustCoachUsed = (coachId, used, note) => {
@@ -1425,6 +1529,129 @@ export default function App() {
   };
 
 
+  // ---- 每月收支報表（內部/管理用，跟calendar month，唔跟財政年度，見§4.1）----
+  const exportMonthlyFinanceReport = async (month) => {
+    try {
+      const XLSX = await import("xlsx-js-style");
+      const wb = XLSX.utils.book_new();
+      const orangeStyle = { fill: { fgColor: { rgb: "FFB347" } }, font: { bold: true, color: { rgb: "000000" } } };
+
+      const allMonths = Array.from(new Set([
+        ...purchaseLog.map((r) => monthKey(r.date)),
+        ...charterLog.map((r) => monthKey(r.bookDate)),
+        ...drinkSalesLog.map((r) => monthKey(r.date)),
+        ...expenseLog.map((r) => monthKey(r.date)),
+      ])).sort((a, b) => b.localeCompare(a));
+      const summaryRows = allMonths.map((m) => {
+        const rev = purchaseLog.filter((r) => monthKey(r.date) === m).reduce((s, r) => s + r.amount, 0);
+        const charter = charterLog.filter((r) => monthKey(r.bookDate) === m).reduce((s, r) => s + r.amount, 0);
+        const drinks = drinkSalesLog.filter((r) => monthKey(r.date) === m).reduce((s, r) => s + r.amount, 0);
+        const expense = expenseLog.filter((r) => monthKey(r.date) === m).reduce((s, r) => s + r.amount, 0);
+        // 淨利潤 = 本月總收入(Pass購買現金) + 其他租場收費 + 飲品銷售 － 本月支出；呢個基礎跟總覽KPI「本月總收入」一致，實際認定方式請會計師覆核
+        return { 月份: m, 本月總收入: rev, 其他租場收費: charter, 飲品銷售: drinks, 本月支出: expense, 淨利潤: rev + charter + drinks - expense };
+      });
+      const unpaidTotal = expenseLog.filter((r) => r.status !== "paid").reduce((s, r) => s + r.amount, 0);
+      summaryRows.push({ 月份: "未歸還總額（累計全部，非單一月份）", 本月總收入: "", 其他租場收費: "", 飲品銷售: "", 本月支出: "", 淨利潤: unpaidTotal });
+      const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+      const range1 = XLSX.utils.decode_range(ws1["!ref"]);
+      for (let c = range1.s.c; c <= range1.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r: range1.e.r, c });
+        if (ws1[addr]) ws1[addr].s = orangeStyle;
+      }
+      XLSX.utils.book_append_sheet(wb, ws1, "摘要");
+
+      const monthExpenses = expenseLog.filter((r) => monthKey(r.date) === month).sort((a, b) => a.date.localeCompare(b.date) || (a.voucherNo || "").localeCompare(b.voucherNo || ""));
+      const detailRows = monthExpenses.map((r) => ({
+        憑證編號: r.voucherNo, 日期: r.date, 類別: r.category, 代付人: r.payer,
+        物品: r.items.map((it) => `${it.name}$${it.amount}`).join("、"), 金額: r.amount,
+        歸還狀態: r.status === "paid" ? "已歸還" : "未歸還",
+        記錄人: r.addedBy === "admin" ? "管理員" : (r.addedBy || "").startsWith("subadmin:") ? `副管理員（${r.addedBy.slice(9)}）` : (r.addedBy || ""),
+      }));
+      const ws2 = XLSX.utils.json_to_sheet(detailRows.length ? detailRows : [{ 憑證編號: "", 日期: "", 類別: "", 代付人: "", 物品: "", 金額: "", 歸還狀態: "", 記錄人: "" }]);
+      if (detailRows.length) {
+        monthExpenses.forEach((r, i) => {
+          if (r.status === "paid") return;
+          const addr = XLSX.utils.encode_cell({ r: i + 1, c: 6 }); // 歸還狀態係第7欄（0-indexed 6）
+          if (ws2[addr]) ws2[addr].s = orangeStyle;
+        });
+      }
+      XLSX.utils.book_append_sheet(wb, ws2, "支出明細");
+
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${BRAND_NAME}_每月收支報表_${month}.xlsx`;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast("已匯出每月收支報表");
+    } catch (e) {
+      showToast("匯出失敗，請重試", "error");
+    }
+  };
+
+  // ---- 年度報稅Excel（俾會計師用，跟財政年度4月1日至3月31日切，唔係calendar year，見§4.2）----
+  const exportAnnualTaxReport = async (fyStartYear) => {
+    try {
+      const XLSX = await import("xlsx-js-style");
+      const wb = XLSX.utils.book_new();
+      const orangeStyle = { fill: { fgColor: { rgb: "FFB347" } }, font: { bold: true, color: { rgb: "000000" } } };
+      const { start, end } = fiscalYearRange(fyStartYear);
+      const inFY = (d) => d >= start && d <= end;
+
+      // Sheet1 Revenue：分行顯示，「應唔應該計落正式Revenue」留返俾user/會計師決定，呢度淨係分開列出
+      const passRevenue = purchaseLog.filter((r) => inFY(r.date)).reduce((s, r) => s + r.amount, 0);
+      const charterRevenue = charterLog.filter((r) => inFY(r.bookDate)).reduce((s, r) => s + r.amount, 0);
+      const drinkRevenue = drinkSalesLog.filter((r) => inFY(r.date)).reduce((s, r) => s + r.amount, 0);
+      const revRows = [
+        { 項目: "Pass租場收入", 金額: passRevenue },
+        { 項目: "包場/小組收入", 金額: charterRevenue },
+        { 項目: "飲品銷售", 金額: drinkRevenue },
+        { 項目: "總收入", 金額: passRevenue + charterRevenue + drinkRevenue },
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(revRows), "Revenue");
+
+      // Sheet2 Detailed income statement：跟審計師15個類別逐行加總，唔理歸還狀態（§4.3：歸唔歸還唔影響呢筆支出係咪已發生）
+      const fyExpenses = expenseLog.filter((r) => inFY(r.date));
+      const catRows = EXPENSE_CATEGORIES.map((cat) => ({ 類別: cat, 金額: fyExpenses.filter((r) => r.category === cat).reduce((s, r) => s + r.amount, 0) }));
+      const uncategorized = fyExpenses.filter((r) => !EXPENSE_CATEGORIES.includes(r.category)).reduce((s, r) => s + r.amount, 0);
+      if (uncategorized > 0) catRows.push({ 類別: "（其他未分類）", 金額: uncategorized });
+      catRows.push({ 類別: "總支出", 金額: fyExpenses.reduce((s, r) => s + r.amount, 0) });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(catRows), "Detailed income statement");
+
+      // Sheet3：逐筆支出記錄，俾會計師抽樣核數
+      const sampleRows = fyExpenses.slice().sort((a, b) => a.date.localeCompare(b.date)).map((r) => ({
+        憑證編號: r.voucherNo, 代付人: r.payer, 歸還狀態: r.status === "paid" ? "已歸還" : "未歸還",
+        日期: r.date, 類別: r.category, 金額: r.amount, 物品: r.items.map((it) => `${it.name}$${it.amount}`).join("、"),
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sampleRows.length ? sampleRows : [{ 憑證編號: "", 代付人: "", 歸還狀態: "", 日期: "", 類別: "", 金額: "", 物品: "" }]), "支出記錄");
+
+      // Sheet4：年結未歸還墊款總額——累計「截至財政年度結束日」仲未歸還嘅全部記錄（唔限於呢個年度內新增嘅），等對得上審計報表「Amount due to members」（見§1/§4.2）
+      const unpaidAtYearEnd = expenseLog.filter((r) => r.status !== "paid" && r.date <= end).sort((a, b) => a.date.localeCompare(b.date));
+      const unpaidRows = unpaidAtYearEnd.map((r) => ({ 憑證編號: r.voucherNo, 俾邊個: r.payer, 日期: r.date, 類別: r.category, 金額: r.amount }));
+      const unpaidTotalFY = unpaidAtYearEnd.reduce((s, r) => s + r.amount, 0);
+      unpaidRows.push({ 憑證編號: "", 俾邊個: "", 日期: "", 類別: "年結未歸還墊款總額", 金額: unpaidTotalFY });
+      const ws4 = XLSX.utils.json_to_sheet(unpaidRows);
+      const range4 = XLSX.utils.decode_range(ws4["!ref"]);
+      for (let c = range4.s.c; c <= range4.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r: range4.e.r, c });
+        if (ws4[addr]) ws4[addr].s = orangeStyle;
+      }
+      XLSX.utils.book_append_sheet(wb, ws4, "年結未歸還墊款");
+
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${BRAND_NAME}_年度報稅_${fiscalYearLabel(fyStartYear).replace("/", "-")}.xlsx`;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast("已匯出年度報稅Excel");
+    } catch (e) {
+      showToast("匯出失敗，請重試", "error");
+    }
+  };
+
   const exportMyIncomeSheet = async () => {
     try {
       const XLSX = await import("xlsx");
@@ -1692,6 +1919,10 @@ export default function App() {
     const monthActualRevenue = monthUsedRevenue + monthCharter;
     const monthDrinks = drinkSalesLog.filter((s) => monthKey(s.date) === viewMonth);
     const monthDrinkAmount = monthDrinks.reduce((sum, s) => sum + s.amount, 0);
+    const monthExpenseRecords = expenseLog.filter((r) => monthKey(r.date) === viewMonth);
+    const monthExpenseAmount = monthExpenseRecords.reduce((sum, r) => sum + r.amount, 0);
+    const monthNetProfit = monthActualRevenue + monthDrinkAmount - monthExpenseAmount;
+    const unpaidExpenseTotal = expenseLog.filter((r) => r.status !== "paid").reduce((s, r) => s + r.amount, 0);
 
     // 各教練總付款（買堂 + 初始）
     const coachPaid = {};
@@ -1814,9 +2045,20 @@ export default function App() {
                 <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月飲品銷售" : "飲品銷售"}</div>
                 <div style={S.kpiBig}>${monthDrinkAmount.toLocaleString()}</div>
               </div>
+              <div style={{ ...S.kpiCard, cursor: "pointer" }} onClick={() => setKpiDetailModal("expense")}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月支出" : "支出"}</div>
+                <div style={{ ...S.kpiBig, color: "#FF8FA3" }}>${monthExpenseAmount.toLocaleString()}</div>
+              </div>
+              <div style={S.kpiCard}>
+                <div style={S.kpiLabel}>{viewMonth === thisMonth ? "本月淨利潤" : "淨利潤"}</div>
+                <div style={{ ...S.kpiBig, color: monthNetProfit >= 0 ? "#6BCB77" : "#FF6B6B" }}>${monthNetProfit.toLocaleString()}</div>
+              </div>
             </div>
             <p style={S.assistHint}>本月＝{thisMonth}　｜　累計總收入 ${totalRevenue.toLocaleString()}　｜　累計已用時數 {totalUsed}　｜　累計已購時數 {totalSold}</p>
-            <p style={S.assistHint}>※ 撳任何一張KPI卡可以睇返呢個月嘅逐筆明細。</p>
+            {unpaidExpenseTotal > 0 && (
+              <p style={{ ...S.assistHint, color: "#FFB347", fontWeight: 700 }}>⚠️ 未歸還墊款累計 ${unpaidExpenseTotal.toLocaleString()}（見「記錄 → 支出記錄」）</p>
+            )}
+            <p style={S.assistHint}>※ 撳任何一張KPI卡可以睇返呢個月嘅逐筆明細；淨利潤＝實際收入＋飲品銷售－支出。</p>
 
 
             <div style={{ ...S.flexBetween, marginBottom: 0 }}>
@@ -2140,6 +2382,7 @@ export default function App() {
               <button style={recordsView === "bookings" ? S.segActive : S.seg} onClick={() => setRecordsView("bookings")}>上堂記錄</button>
               <button style={recordsView === "cancelled" ? S.segActive : S.seg} onClick={() => setRecordsView("cancelled")}>取消記錄 {cancelLog.length > 0 && <span style={S.badge}>{cancelLog.length}</span>}</button>
               <button style={recordsView === "drinks" ? S.segActive : S.seg} onClick={() => setRecordsView("drinks")}>飲品記錄</button>
+              <button style={recordsView === "expenses" ? S.segActive : S.seg} onClick={() => setRecordsView("expenses")}>支出記錄 {expenseLog.length > 0 && <span style={S.badge}>{expenseLog.length}</span>}</button>
             </div>
 
             {recordsView === "bookings" ? (() => {
@@ -2241,7 +2484,7 @@ export default function App() {
                 </div>
                 <p style={S.assistHint}>※ 留底紀錄，方便日後查核某時段點解空出，唔可以還原。</p>
               </>
-            ) : (
+            ) : recordsView === "drinks" ? (
               <>
                 <div style={{ ...S.bookingList, marginTop: 16 }}>
                   {drinkSalesLog.length === 0 ? <p style={S.emptyText}>暫無飲品銷售記錄</p> : drinkSalesLog.map((s) => (
@@ -2261,7 +2504,48 @@ export default function App() {
                 </div>
                 <p style={S.assistHint}>※ 呢度純粹記錄「話咗轉數」，系統唔會自動核實款項有冇真係入到。</p>
               </>
-            )}
+            ) : (() => {
+              const unpaidTotal = expenseLog.filter((r) => r.status !== "paid").reduce((s, r) => s + r.amount, 0);
+              const sortedExpenses = expenseLog.slice().sort((a, b) => (b.at || b.date || "").localeCompare(a.at || a.date || ""));
+              return (
+              <>
+                <div style={{ ...S.flexBetween, marginTop: 14, flexWrap: "wrap", gap: 8 }}>
+                  <button style={S.addBtn} onClick={() => setExpenseModal({ id: null, date: formatDate(new Date()), category: EXPENSE_CATEGORIES[0], payer: "", items: [{ name: "", amount: "" }], status: "unpaid" })}>＋ 新增支出</button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button style={S.smallBtn} onClick={() => setFinanceReportModal("monthly")}>📊 每月收支報表</button>
+                    <button style={S.smallBtn} onClick={() => setFinanceReportModal("annual")}>📑 年度報稅Excel</button>
+                  </div>
+                </div>
+                {unpaidTotal > 0 && (
+                  <div style={{ background: "#3a2a0f", border: "1px solid #5a4520", borderRadius: 10, padding: "10px 14px", margin: "14px 0", color: "#FFB347", fontWeight: 700, fontSize: 13 }}>
+                    ⚠️ 未歸還總額：${unpaidTotal.toLocaleString()}
+                  </div>
+                )}
+                <div style={{ ...S.bookingList, marginTop: 14 }}>
+                  {sortedExpenses.length === 0 ? <p style={S.emptyText}>暫無支出記錄</p> : sortedExpenses.map((r) => (
+                    <div key={r.id} style={S.bookingItem}>
+                      <div style={{ ...S.dot, background: r.status === "paid" ? "#6BCB77" : "#FFB347" }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={S.bookingCoach}>
+                          {r.category} <span style={S.soloTag}>${r.amount.toLocaleString()}</span>
+                          <span style={r.status === "paid" ? { ...S.soloTag, color: "#6BCB77", background: "#13301e" } : { ...S.soloTag, color: "#FFB347", background: "#332a0f" }}>{r.status === "paid" ? "已歸還" : "未歸還"}</span>
+                        </div>
+                        <div style={S.bookingTime}>{r.date}　代付：{r.payer}　{r.voucherNo}</div>
+                        <div style={S.bookingTime}>{r.items.map((it) => `${it.name} $${it.amount}`).join("、")}</div>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <button style={S.smallBtn} onClick={() => setVoucherModal(r)}>🧾 憑證</button>
+                        <button style={S.smallBtn} onClick={() => toggleExpenseStatus(r.id)}>{r.status === "paid" ? "標為未歸還" : "標為已歸還"}</button>
+                        <button style={S.smallBtn} onClick={() => setExpenseModal({ id: r.id, date: r.date, category: r.category, payer: r.payer, items: r.items.map((it) => ({ ...it })), status: r.status })}>編輯</button>
+                        <button style={S.delBtn} onClick={() => setDelExpenseModal(r)}>刪除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p style={S.assistHint}>※ 支出一經記錄即當已發生，歸還與否淨係影響「欠邊個錢」，唔會改變支出總額。</p>
+              </>
+              );
+            })()}
           </div>
         )}
 
@@ -2940,6 +3224,11 @@ export default function App() {
             sub = "淨係顯示金額，唔顯示支數";
             total = `$${monthDrinkAmount.toLocaleString()}`;
             rows = monthDrinks.map((s) => ({ main: s.coachName, sub: s.items.map((it) => `${it.name} x${it.qty}`).join("、"), val: `$${s.amount.toLocaleString()}` }));
+          } else if (kpiDetailModal === "expense") {
+            title = "本月支出";
+            sub = "全部支出（唔理歸還狀態）";
+            total = `$${monthExpenseAmount.toLocaleString()}`;
+            rows = monthExpenseRecords.map((r) => ({ main: `${r.category} · ${r.payer}`, sub: `${r.date}${r.status !== "paid" ? "　未歸還" : ""}`, val: `$${r.amount.toLocaleString()}` }));
           }
           return (
             <div style={S.modalOverlay} onClick={() => setKpiDetailModal(null)}>
@@ -3124,6 +3413,100 @@ export default function App() {
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setDelDrinkSaleModal(null)}>取消</button>
               <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => { deleteDrinkSale(delDrinkSaleModal.id); setDelDrinkSaleModal(null); }}>確認剷除</button>
+            </div>
+          </div></div>
+        )}
+        {expenseModal && (
+          <div style={S.modalOverlay}><div style={{ ...S.modal, width: 340, textAlign: "left" }}>
+            <h3 style={S.modalTitle}>{expenseModal.id ? "編輯支出" : "新增支出"}</h3>
+            <Field label="購買日期"><input style={S.input} type="date" value={expenseModal.date} onChange={(e) => setExpenseModal({ ...expenseModal, date: e.target.value })} /></Field>
+            <Field label="類別">
+              <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={expenseModal.category} onChange={(e) => setExpenseModal({ ...expenseModal, category: e.target.value })}>
+                {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </Field>
+            <Field label="代付人">
+              <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={expenseModal.payer} onChange={(e) => setExpenseModal({ ...expenseModal, payer: e.target.value })}>
+                <option value="">請選擇</option>
+                {expensePayerOptions().map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </Field>
+            <label style={S.label}>物品（可多項）</label>
+            {expenseModal.items.map((it, idx) => (
+              <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <input style={{ ...S.input, flex: 2 }} placeholder="物品名（例如：門簾）" value={it.name} onChange={(e) => {
+                  const items = [...expenseModal.items]; items[idx] = { ...items[idx], name: e.target.value }; setExpenseModal({ ...expenseModal, items });
+                }} />
+                <input style={{ ...S.input, flex: 1 }} type="number" min="0" placeholder="$" value={it.amount} onChange={(e) => {
+                  const items = [...expenseModal.items]; items[idx] = { ...items[idx], amount: e.target.value }; setExpenseModal({ ...expenseModal, items });
+                }} />
+                {expenseModal.items.length > 1 && (
+                  <button style={S.delBtn} onClick={() => setExpenseModal({ ...expenseModal, items: expenseModal.items.filter((_, i) => i !== idx) })}>－</button>
+                )}
+              </div>
+            ))}
+            <button style={{ ...S.linkBtn, marginBottom: 12 }} onClick={() => setExpenseModal({ ...expenseModal, items: [...expenseModal.items, { name: "", amount: "" }] })}>＋ 加多項物品</button>
+            <p style={S.amountPreview}>總金額：${expenseModal.items.reduce((s, it) => s + (Number(it.amount) || 0), 0).toLocaleString()}</p>
+            <label style={S.label}>歸還狀態</label>
+            <div style={S.segRow}>
+              <button style={expenseModal.status === "unpaid" ? S.segActive : S.seg} onClick={() => setExpenseModal({ ...expenseModal, status: "unpaid" })}>未歸還</button>
+              <button style={expenseModal.status === "paid" ? S.segActive : S.seg} onClick={() => setExpenseModal({ ...expenseModal, status: "paid" })}>已歸還</button>
+            </div>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setExpenseModal(null)}>取消</button>
+              <button style={S.modalConfirm} onClick={() => { if (saveExpense(expenseModal)) setExpenseModal(null); }}>儲存</button>
+            </div>
+          </div></div>
+        )}
+        {delExpenseModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>刪除支出記錄</h3>
+            <p style={S.modalText}>{delExpenseModal.category}　{delExpenseModal.date}　${delExpenseModal.amount.toLocaleString()}</p>
+            <p style={S.modalText}>確定刪除？此動作無法復原。</p>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setDelExpenseModal(null)}>取消</button>
+              <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => { deleteExpense(delExpenseModal.id); setDelExpenseModal(null); }}>確認刪除</button>
+            </div>
+          </div></div>
+        )}
+        {voucherModal && (
+          <div style={S.modalOverlay}><div style={{ ...S.modal, width: 340 }}>
+            <h3 style={S.modalTitle}>生成支出憑證</h3>
+            <p style={S.modalText}>{voucherModal.category}　${voucherModal.amount.toLocaleString()}　{voucherModal.voucherNo}</p>
+            <label style={S.label}>單據相（可選，唔上傳都得）</label>
+            <input style={{ ...S.input, padding: "8px" }} type="file" accept="image/*" onChange={(e) => setVoucherReceiptFile(e.target.files?.[0] || null)} />
+            <p style={S.assistHint}>※ 有相就將支出資料疊喺相右下角；冇相就生成一張獨立嘅資料卡。呢張圖只會download到你部裝置，唔會上傳雲端。</p>
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => { setVoucherModal(null); setVoucherReceiptFile(null); }}>取消</button>
+              <button style={S.modalConfirm} onClick={async () => { await downloadExpenseVoucher(voucherModal, voucherReceiptFile); setVoucherModal(null); setVoucherReceiptFile(null); }}>生成並下載</button>
+            </div>
+          </div></div>
+        )}
+        {financeReportModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>{financeReportModal === "monthly" ? "匯出每月收支報表" : "匯出年度報稅Excel"}</h3>
+            {financeReportModal === "monthly" ? (
+              <>
+                <p style={S.modalText}>選擇支出明細要顯示嘅月份（摘要sheet會包含所有月份）</p>
+                <input style={{ ...S.select, width: "100%", boxSizing: "border-box" }} type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} />
+              </>
+            ) : (
+              <>
+                <p style={S.modalText}>選擇財政年度（4月1日至翌年3月31日）</p>
+                <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={reportFYStart} onChange={(e) => setReportFYStart(Number(e.target.value))}>
+                  {Array.from({ length: 6 }, (_, i) => fiscalYearOf(formatDate(new Date())) - i).map((y) => (
+                    <option key={y} value={y}>{fiscalYearLabel(y)}（{y}-04-01 至 {y + 1}-03-31）</option>
+                  ))}
+                </select>
+              </>
+            )}
+            <div style={S.modalBtns}>
+              <button style={S.modalCancel} onClick={() => setFinanceReportModal(null)}>取消</button>
+              <button style={S.modalConfirm} onClick={async () => {
+                if (financeReportModal === "monthly") await exportMonthlyFinanceReport(reportMonth);
+                else await exportAnnualTaxReport(reportFYStart);
+                setFinanceReportModal(null);
+              }}>匯出</button>
             </div>
           </div></div>
         )}
