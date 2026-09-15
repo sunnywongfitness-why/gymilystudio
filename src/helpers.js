@@ -193,14 +193,18 @@ function layoutVoucherCard(ctx, record, x, yTop, w, measureOnly) {
   line("代付人", record.payer);
   // ⚠️歸還狀態（未歸還/已歸還）刻意唔顯示喺憑證圖度（見§3.2）——呢張圖淨係做「呢筆錢使咗」嘅單據，唔記錄內部欠款狀態
 
-  if (record.items.length > 1) {
+  // 物品：淨係得一項都要顯示返買咗乜（唔淨係得個大類別），等人睇張憑證知道實際買咗咩；多於一項先加標題同逐項列
+  const namedItems = record.items.filter((it) => it.name);
+  if (namedItems.length === 1) {
+    line("物品", namedItems[0].name);
+  } else if (namedItems.length > 1) {
     cy += lineSize * 0.3;
     if (draw) { ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + innerW, cy); ctx.stroke(); }
     cy += lineSize * 0.7;
     if (draw) { ctx.fillStyle = "#aaa"; ctx.font = `600 ${Math.round(lineSize * 0.9)}px sans-serif`; ctx.fillText("物品明細", cx, cy); }
     cy += lineSize * 1.4;
     if (draw) { ctx.font = `400 ${Math.round(lineSize * 0.92)}px sans-serif`; ctx.fillStyle = "#ccc"; }
-    record.items.forEach((it) => { if (draw) ctx.fillText(`${it.name}　$${it.amount.toLocaleString()}`, cx, cy); cy += lineSize * 1.4; });
+    namedItems.forEach((it) => { if (draw) ctx.fillText(`${it.name}　$${it.amount.toLocaleString()}`, cx, cy); cy += lineSize * 1.4; });
   }
 
   cy += lineSize * 0.5;
