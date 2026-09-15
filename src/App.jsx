@@ -46,6 +46,14 @@ function Icon({ name, size = 21 }) {
   );
 }
 
+// 清潔輪流：4樣嘢獨立輪，「下一個」=呢一樣嘢做得最少嘅參與教練（2026-09定案）
+const CLEANING_TASKS = [
+  { key: "trash", label: "倒垃圾" },
+  { key: "toilet_water", label: "換洗手間水" },
+  { key: "toilet_clean", label: "清潔洗手間" },
+  { key: "vacuum", label: "吸塵" },
+];
+
 export default function App() {
   const [coaches, setCoaches] = useState(() => persisted("coaches", DEFAULT_COACHES));
   const [currentUser, setCurrentUser] = useState(() => initialSession?.user || null);
@@ -89,6 +97,9 @@ export default function App() {
   const [assistCancelLog, setAssistCancelLog] = useState(() => persisted("assistCancelLog", [])); // {coachId, month, date, start}
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
   const [syncConflictLog, setSyncConflictLog] = useState(() => persisted("syncConflictLog", [])); // {at, keysLocal, keysRemote, bookingSlotsLocal, bookingSlotsRemote} 每次偵測到雲端同步衝突就記一筆，唔使人手逼再現先知道有冇撞
+  const [cleaningParticipants, setCleaningParticipants] = useState(() => persisted("cleaningParticipants", [])); // 參與清潔輪流嘅教練id
+  const [cleaningLog, setCleaningLog] = useState(() => persisted("cleaningLog", [])); // {id, task, coachId, coachName, date, at} 逐筆清潔完成記錄，4樣嘢獨立輪（2026-09定案）
+  const [cleaningLogModal, setCleaningLogModal] = useState(false);
   const [drinkProducts, setDrinkProducts] = useState(() => persisted("drinkProducts", [])); // {id, name, price} 飲品產品清單，admin喺設定維護
   // textTemplates嘅預設範本合併：saved data入面冇嘅新增DEFAULT_TEXT_TEMPLATES項目（例如之後新加嘅⑦），自動補返，唔覆蓋user已編輯嘅內容
   const mergeTemplateDefaults = (saved) => {
@@ -140,6 +151,8 @@ export default function App() {
     if (d.drinkProducts !== undefined) setDrinkProducts(d.drinkProducts);
     if (d.textTemplates !== undefined) setTextTemplates(mergeTemplateDefaults(d.textTemplates));
     if (d.syncConflictLog !== undefined) setSyncConflictLog(d.syncConflictLog);
+    if (d.cleaningParticipants !== undefined) setCleaningParticipants(d.cleaningParticipants);
+    if (d.cleaningLog !== undefined) setCleaningLog(d.cleaningLog);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
   };
@@ -155,7 +168,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -202,7 +215,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -255,7 +268,7 @@ export default function App() {
       if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
       else { setSyncState("error"); } // 失敗唔更新lastSyncedRef，等落次有變動會自然重試
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
   // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
@@ -629,6 +642,21 @@ export default function App() {
   };
   const removeDrinkProduct = (id) => {
     setDrinkProducts((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  // ---- 清潔輪流：4樣獨立輪，「下一個」=呢樣嘢做得最少嘅參與教練，任何參與教練隨時可以自己標記完成（2026-09定案）----
+  const cleaningNextFor = (taskKey) => {
+    const participants = coaches.filter((c) => cleaningParticipants.includes(c.id));
+    if (participants.length === 0) return null;
+    const counts = participants.map((c) => ({ coach: c, count: cleaningLog.filter((r) => r.task === taskKey && r.coachId === c.id).length }));
+    counts.sort((a, b) => a.count - b.count);
+    return counts[0].coach;
+  };
+  const markCleaningDone = (taskKey) => {
+    const label = CLEANING_TASKS.find((t) => t.key === taskKey)?.label || taskKey;
+    const entry = { id: "cl" + Date.now() + "-" + Math.random().toString(36).slice(2), task: taskKey, coachId: currentUser.id, coachName: currentUser.name, date: formatDate(new Date()), at: nowStamp() };
+    setCleaningLog((prev) => [entry, ...prev]);
+    showToast(`已記錄：${label}`);
   };
 
   // ---- 文本範本庫（第10項重構）：admin可自由編輯/新增/刪除範本，撳「發送文本」揀教練+範本，自動代入{{教練名}}，時數留喺預覽度手動填 ----
@@ -2332,6 +2360,20 @@ export default function App() {
                         </>
                       )}
                     </div>
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>清潔輪流</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>揀邊啲教練參與「倒垃圾/換洗手間水/清潔洗手間/吸塵」輪流。4樣嘢獨立輪，「下一個」自動計做得最少嗰位，冇固定週期，教練自己喺「其他」分頁隨時標記完成。</p>
+                      <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
+                        {coaches.map((c) => (
+                          <label key={c.id} style={S.checkLabel}>
+                            <input type="checkbox" checked={cleaningParticipants.includes(c.id)}
+                              onChange={(e) => setCleaningParticipants((prev) => e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id))} /> {c.name}
+                          </label>
+                        ))}
+                      </div>
+                      <button style={{ ...S.smallBtn, marginTop: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
+                    </div>
                   </>
                 )}
 
@@ -2946,6 +2988,45 @@ export default function App() {
             </div></div>
           );
         })()}
+        {cleaningLogModal && (
+          <div style={S.modalOverlay}><div style={S.modal}>
+            <h3 style={S.modalTitle}>清潔輪流記錄</h3>
+            <div style={{ overflowX: "auto", marginBottom: 14 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>教練</th>
+                    {CLEANING_TASKS.map((t) => <th key={t.key} style={{ padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>{t.label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {coaches.filter((c) => cleaningParticipants.includes(c.id)).map((c) => (
+                    <tr key={c.id}>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid #1e1e1e" }}>{c.name}</td>
+                      {CLEANING_TASKS.map((t) => (
+                        <td key={t.key} style={{ textAlign: "center", padding: "6px 4px", borderBottom: "1px solid #1e1e1e", color: "#4ECDC4" }}>
+                          {cleaningLog.filter((r) => r.task === t.key && r.coachId === c.id).length}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p style={{ ...S.label, marginBottom: 6 }}>最近記錄</p>
+            {cleaningLog.length === 0 ? <p style={S.emptyText}>暫無記錄</p> : (
+              <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                {cleaningLog.slice(0, 40).map((r) => (
+                  <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e" }}>
+                    <span>{CLEANING_TASKS.find((t) => t.key === r.task)?.label || r.task} · {r.coachName}</span>
+                    <span>{r.date}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button style={{ ...S.modalCancel, width: "100%", marginTop: 16 }} onClick={() => setCleaningLogModal(false)}>關閉</button>
+          </div></div>
+        )}
         {resetModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>重設所有資料</h3>
@@ -3608,6 +3689,27 @@ export default function App() {
 
       {view === "other" && (
         <div style={S.container}>
+          {cleaningParticipants.length > 0 && (
+            <>
+              <h2 style={S.sectionTitle}>🧹 清潔輪流</h2>
+              <div style={S.formCard}>
+                {CLEANING_TASKS.map((t) => {
+                  const next = cleaningNextFor(t.key);
+                  return (
+                    <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222" }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{t.label}</div>
+                        <div style={S.assistHint}>下一個：{next ? next.name : "—"}</div>
+                      </div>
+                      <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>✓ 我啱啱做咗</button>
+                    </div>
+                  );
+                })}
+                <button style={{ ...S.linkBtn, marginTop: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
+              </div>
+            </>
+          )}
+
           <h2 style={S.sectionTitle}>🥤 飲品訂購</h2>
           <div style={S.formCard}>
             {drinkProducts.length === 0 ? (
@@ -3660,6 +3762,46 @@ export default function App() {
             <button style={S.loginBtn} onClick={changePassword}>更新密碼</button>
           </div>
         </div>
+      )}
+
+      {cleaningLogModal && (
+        <div style={S.modalOverlay}><div style={S.modal}>
+          <h3 style={S.modalTitle}>清潔輪流記錄</h3>
+          <div style={{ overflowX: "auto", marginBottom: 14 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>教練</th>
+                  {CLEANING_TASKS.map((t) => <th key={t.key} style={{ padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>{t.label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {coaches.filter((c) => cleaningParticipants.includes(c.id)).map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ padding: "6px 4px", borderBottom: "1px solid #1e1e1e" }}>{c.name}</td>
+                    {CLEANING_TASKS.map((t) => (
+                      <td key={t.key} style={{ textAlign: "center", padding: "6px 4px", borderBottom: "1px solid #1e1e1e", color: "#4ECDC4" }}>
+                        {cleaningLog.filter((r) => r.task === t.key && r.coachId === c.id).length}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p style={{ ...S.label, marginBottom: 6 }}>最近記錄</p>
+          {cleaningLog.length === 0 ? <p style={S.emptyText}>暫無記錄</p> : (
+            <div style={{ maxHeight: 220, overflowY: "auto" }}>
+              {cleaningLog.slice(0, 40).map((r) => (
+                <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e" }}>
+                  <span>{CLEANING_TASKS.find((t) => t.key === r.task)?.label || r.task} · {r.coachName}</span>
+                  <span>{r.date}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <button style={{ ...S.modalCancel, width: "100%", marginTop: 16 }} onClick={() => setCleaningLogModal(false)}>關閉</button>
+        </div></div>
       )}
 
       {retroBookModal && (
