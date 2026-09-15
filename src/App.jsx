@@ -2038,7 +2038,7 @@ export default function App() {
                   <div style={{ ...S.avatar, background: c.color }}>{c.initials}</div>
                   <div style={{ flex: 1 }}>
                     <div style={S.bookingCoach}>{idx + 1}. {c.name} <span style={S.idTag}>@{c.username}</span></div>
-                    <div style={S.bookingTime}>Pass時數 {c.used}/{c.credits} 小時　代book每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
+                    <div style={S.bookingTime}>Pass時數 {c.credits - c.used}/{c.credits} 小時　代book每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
                   </div>
                   <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 時數</button>
                   <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00" })}>⚠️ 提醒補book</button>
