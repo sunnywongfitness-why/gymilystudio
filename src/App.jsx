@@ -100,6 +100,7 @@ export default function App() {
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
   const [syncConflictLog, setSyncConflictLog] = useState(() => persisted("syncConflictLog", [])); // {at, keysLocal, keysRemote, bookingSlotsLocal, bookingSlotsRemote} 每次偵測到雲端同步衝突就記一筆，唔使人手逼再現先知道有冇撞
   const [cleaningParticipants, setCleaningParticipants] = useState(() => persisted("cleaningParticipants", [])); // 參與清潔輪流嘅教練id
+  const [trialParticipants, setTrialParticipants] = useState(() => persisted("trialParticipants", [])); // 參與試堂輪流嘅教練id（2026-09新增）
   const [cleaningTasks, setCleaningTasks] = useState(() => persisted("cleaningTasks", DEFAULT_CLEANING_TASKS)); // 清潔輪流嘅工作項目，admin可自行新增/刪除
   const [cleaningLog, setCleaningLog] = useState(() => persisted("cleaningLog", [])); // {id, task, coachId, coachName, date, at} 逐筆清潔完成記錄，4樣嘢獨立輪（2026-09定案）
   const [cleaningLogModal, setCleaningLogModal] = useState(false);
@@ -165,6 +166,7 @@ export default function App() {
     if (d.syncConflictLog !== undefined) setSyncConflictLog(d.syncConflictLog);
     if (d.cleaningParticipants !== undefined) setCleaningParticipants(d.cleaningParticipants);
     if (d.cleaningTasks !== undefined) setCleaningTasks(d.cleaningTasks);
+    if (d.trialParticipants !== undefined) setTrialParticipants(d.trialParticipants);
     if (d.cleaningLog !== undefined) setCleaningLog(d.cleaningLog);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
@@ -182,7 +184,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -258,7 +260,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -318,7 +320,7 @@ export default function App() {
       if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
       else { setSyncState("error"); } // 失敗唔更新lastSyncedRef，等落次有變動會自然重試
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
   // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
@@ -704,6 +706,24 @@ export default function App() {
     return counts[0].coach;
   };
   const cleaningLastFor = (taskKey) => cleaningLog.find((r) => r.task === taskKey) || null; // cleaningLog 由新到舊排，第一筆就係上次完成
+
+  // ---- 試堂輪流：Book試堂嗰陣自動建議「教得最少」嘅參與教練，直接攞現有試堂booking記錄嚟計，唔開新log（2026-09新增）----
+  const trialNextFor = () => {
+    const participants = coaches.filter((c) => trialParticipants.includes(c.id));
+    if (participants.length === 0) return null;
+    const trialCounts = {}; // coachName -> 已教試堂次數
+    Object.entries(bookings).forEach(([k, arr]) => {
+      const date = k.split("_")[0];
+      arr.forEach((v) => {
+        if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName) {
+          trialCounts[v.coachName] = (trialCounts[v.coachName] || 0) + 1;
+        }
+      });
+    });
+    const counts = participants.map((c) => ({ coach: c, count: trialCounts[c.name] || 0 }));
+    counts.sort((a, b) => a.count - b.count);
+    return counts[0].coach;
+  };
   const markCleaningDone = (taskKey) => {
     const label = cleaningTasks.find((t) => t.key === taskKey)?.label || taskKey;
     const entry = { id: "cl" + Date.now() + "-" + Math.random().toString(36).slice(2), task: taskKey, coachId: currentUser.id, coachName: currentUser.name, date: formatDate(new Date()), at: nowStamp() };
@@ -2699,6 +2719,37 @@ export default function App() {
                       </div>
                       <button style={{ ...S.smallBtn, marginTop: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
                     </div>
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>試堂輪流</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>揀邊啲教練參與試堂輪流。落「包場／小組／試堂」揀「試堂」嗰陣，會根據呢度嘅參與教練，自動建議邊個教得最少，幫你填埋「負責教練」（仍然可以自己手動改）。呢個計數直接攞現有試堂booking記錄，唔使教練另外標記。</p>
+                      <label style={S.label}>參與教練</label>
+                      <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
+                        {coaches.map((c) => (
+                          <label key={c.id} style={S.checkLabel}>
+                            <input type="checkbox" checked={trialParticipants.includes(c.id)}
+                              onChange={(e) => setTrialParticipants((prev) => e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id))} /> {c.name}
+                          </label>
+                        ))}
+                      </div>
+                      {trialParticipants.length > 0 && (
+                        <div style={{ marginTop: 14 }}>
+                          <label style={S.label}>已教試堂次數</label>
+                          {coaches.filter((c) => trialParticipants.includes(c.id)).map((c) => {
+                            let count = 0;
+                            Object.entries(bookings).forEach(([k, arr]) => {
+                              const date = k.split("_")[0];
+                              arr.forEach((v) => { if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName === c.name) count++; });
+                            });
+                            return (
+                              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e" }}>
+                                <span>{c.name}</span><span style={{ color: "#4ECDC4" }}>{count} 堂</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
 
@@ -3034,7 +3085,7 @@ export default function App() {
             <div style={S.segRow}>
               <button style={charterModal.charterType === "private" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "private", price: ["trial", "clean"].includes(charterModal.charterType) ? CHARTER_PRICE : charterModal.price })}>私人包場</button>
               <button style={charterModal.charterType === "group" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "group", price: ["trial", "clean"].includes(charterModal.charterType) ? CHARTER_PRICE : charterModal.price })}>小組訓練</button>
-              <button style={charterModal.charterType === "trial" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "trial", price: 0 })}>試堂</button>
+              <button style={charterModal.charterType === "trial" ? S.segActive : S.seg} onClick={() => { const next = trialNextFor(); setCharterModal({ ...charterModal, charterType: "trial", price: 0, coachName: next ? next.name : charterModal.coachName }); }}>試堂</button>
               <button style={charterModal.charterType === "clean" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "clean", price: 0 })}>🧹 清潔</button>
             </div>
             {charterModal.charterType === "trial"
@@ -3063,6 +3114,18 @@ export default function App() {
               <option value="">（未指定）</option>
               {coaches.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
+            {charterModal.charterType === "trial" && (() => {
+              const next = trialNextFor();
+              if (!next) return <p style={{ ...S.assistHint, marginTop: 6 }}>未設定試堂輪流參與教練，去「設定 → 清潔輪流」下面嘅「試堂輪流」加返參與教練，先有自動建議。</p>;
+              return (
+                <p style={{ ...S.assistHint, marginTop: 6 }}>
+                  建議：下一個試堂 <strong style={{ color: "#4ECDC4" }}>{next.name}</strong>（教得最少，已幫你填咗，可以自己改）
+                  {charterModal.coachName !== next.name && (
+                    <> · <span style={{ color: "#4ECDC4", cursor: "pointer", textDecoration: "underline" }} onClick={() => setCharterModal({ ...charterModal, coachName: next.name })}>用返建議</span></>
+                  )}
+                </p>
+              );
+            })()}
 
             {charterModal.charterType === "clean" && (
               <>
