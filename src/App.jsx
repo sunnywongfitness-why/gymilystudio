@@ -48,8 +48,8 @@ function Icon({ name, size = 21 }) {
   );
 }
 
-// 清潔輪流：4樣嘢獨立輪，「下一個」=呢一樣嘢做得最少嘅參與教練（2026-09定案）
-const CLEANING_TASKS = [
+// 清潔輪流：每樣嘢獨立輪，「下一個」=呢一樣嘢做得最少嘅參與教練（2026-09定案）。呢個係預設4樣，admin可以喺「清潔輪流」設定度自己加/刪（2026-09擴充）
+const DEFAULT_CLEANING_TASKS = [
   { key: "trash", label: "倒垃圾" },
   { key: "toilet_water", label: "換洗手間水" },
   { key: "toilet_clean", label: "清潔洗手間" },
@@ -100,6 +100,7 @@ export default function App() {
   const [cancelLog, setCancelLog] = useState(() => persisted("cancelLog", [])); // {date, start, hours, type, charterType, coachId, coachName, price, cancelledBy, cancelledAt}
   const [syncConflictLog, setSyncConflictLog] = useState(() => persisted("syncConflictLog", [])); // {at, keysLocal, keysRemote, bookingSlotsLocal, bookingSlotsRemote} 每次偵測到雲端同步衝突就記一筆，唔使人手逼再現先知道有冇撞
   const [cleaningParticipants, setCleaningParticipants] = useState(() => persisted("cleaningParticipants", [])); // 參與清潔輪流嘅教練id
+  const [cleaningTasks, setCleaningTasks] = useState(() => persisted("cleaningTasks", DEFAULT_CLEANING_TASKS)); // 清潔輪流嘅工作項目，admin可自行新增/刪除
   const [cleaningLog, setCleaningLog] = useState(() => persisted("cleaningLog", [])); // {id, task, coachId, coachName, date, at} 逐筆清潔完成記錄，4樣嘢獨立輪（2026-09定案）
   const [cleaningLogModal, setCleaningLogModal] = useState(false);
   const [drinkProducts, setDrinkProducts] = useState(() => persisted("drinkProducts", [])); // {id, name, price} 飲品產品清單，admin喺設定維護
@@ -127,6 +128,7 @@ export default function App() {
   const [drinkCart, setDrinkCart] = useState({}); // { [productId]: qty } 揀緊嘅支數，未確認
   const [drinkQrModal, setDrinkQrModal] = useState(null); // { items, amount } 撳「下一步」之後顯示收款QR畀學生睇
   const [newDrinkForm, setNewDrinkForm] = useState({ name: "", price: "" }); // admin新增產品用嘅暫存輸入
+  const [newCleaningTaskLabel, setNewCleaningTaskLabel] = useState(""); // admin新增清潔工作用嘅暫存輸入
   const [syncState, setSyncState] = useState(cloudEnabled ? "connecting" : "local"); // connecting | synced | local | error
 
   // 同步用：記住最後一次「已儲存／已收到」嘅內容，避免回音造成無限迴圈
@@ -162,6 +164,7 @@ export default function App() {
     if (d.textTemplates !== undefined) setTextTemplates(mergeTemplateDefaults(d.textTemplates));
     if (d.syncConflictLog !== undefined) setSyncConflictLog(d.syncConflictLog);
     if (d.cleaningParticipants !== undefined) setCleaningParticipants(d.cleaningParticipants);
+    if (d.cleaningTasks !== undefined) setCleaningTasks(d.cleaningTasks);
     if (d.cleaningLog !== undefined) setCleaningLog(d.cleaningLog);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
@@ -179,7 +182,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -255,7 +258,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -315,7 +318,7 @@ export default function App() {
       if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
       else { setSyncState("error"); } // 失敗唔更新lastSyncedRef，等落次有變動會自然重試
     }, 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningLog]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
   // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
@@ -702,13 +705,23 @@ export default function App() {
   };
   const cleaningLastFor = (taskKey) => cleaningLog.find((r) => r.task === taskKey) || null; // cleaningLog 由新到舊排，第一筆就係上次完成
   const markCleaningDone = (taskKey) => {
-    const label = CLEANING_TASKS.find((t) => t.key === taskKey)?.label || taskKey;
+    const label = cleaningTasks.find((t) => t.key === taskKey)?.label || taskKey;
     const entry = { id: "cl" + Date.now() + "-" + Math.random().toString(36).slice(2), task: taskKey, coachId: currentUser.id, coachName: currentUser.name, date: formatDate(new Date()), at: nowStamp() };
     setCleaningLog((prev) => [entry, ...prev]);
     showToast(`已記錄：${label}`);
   };
   const updateCleaningEntryTask = (id, newTask) => {
     setCleaningLog((prev) => prev.map((r) => r.id === id ? { ...r, task: newTask } : r));
+  };
+  const addCleaningTask = (label) => {
+    const name = (label || "").trim();
+    if (!name) { showToast("請輸入工作名稱", "error"); return; }
+    if (cleaningTasks.some((t) => t.label === name)) { showToast("已經有呢個名嘅工作", "error"); return; }
+    const key = "ct" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    setCleaningTasks((prev) => [...prev, { key, label: name }]);
+  };
+  const removeCleaningTask = (key) => {
+    setCleaningTasks((prev) => prev.filter((t) => t.key !== key));
   };
   const deleteCleaningEntry = (id) => {
     setCleaningLog((prev) => prev.filter((r) => r.id !== id));
@@ -2657,7 +2670,25 @@ export default function App() {
 
                     <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>清潔輪流</h2>
                     <div style={S.formCard}>
-                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>揀邊啲教練參與「倒垃圾/換洗手間水/清潔洗手間/吸塵」輪流。4樣嘢獨立輪，「下一個」自動計做得最少嗰位，冇固定週期，教練自己喺「其他」分頁隨時標記完成。</p>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>揀邊啲教練參與「{cleaningTasks.map((t) => t.label).join("/") || "（未有工作項目）"}」輪流。每樣嘢獨立輪，「下一個」自動計做得最少嗰位，冇固定週期，教練自己喺首頁隨時標記完成。</p>
+                      <label style={{ ...S.label, marginTop: 4 }}>工作項目</label>
+                      {cleaningTasks.length === 0 ? <p style={S.emptyText}>暫無工作項目，喺下面新增一個先</p> : (
+                        <div style={{ marginBottom: 10 }}>
+                          {cleaningTasks.map((t) => (
+                            <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #222" }}>
+                              <span>{t.label}</span>
+                              <button style={S.delBtn} onClick={() => removeCleaningTask(t.key)}>刪</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                        <input style={S.input} value={newCleaningTaskLabel} placeholder="新工作名稱，例如「抹鏡」"
+                          onChange={(e) => setNewCleaningTaskLabel(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { addCleaningTask(newCleaningTaskLabel); setNewCleaningTaskLabel(""); } }} />
+                        <button style={{ ...S.creditBtn, whiteSpace: "nowrap" }} onClick={() => { addCleaningTask(newCleaningTaskLabel); setNewCleaningTaskLabel(""); }}>新增</button>
+                      </div>
+                      <label style={S.label}>參與教練</label>
                       <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
                         {coaches.map((c) => (
                           <label key={c.id} style={S.checkLabel}>
@@ -3325,13 +3356,13 @@ export default function App() {
                 <thead>
                   <tr>
                     <th style={{ textAlign: "left", padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>教練</th>
-                    {CLEANING_TASKS.map((t) => <th key={t.key} style={{ padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>{t.label}</th>)}
+                    {cleaningTasks.map((t) => <th key={t.key} style={{ padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>{t.label}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td style={{ padding: "6px 4px", borderBottom: "1px solid #333", color: "#888" }}>上次</td>
-                    {CLEANING_TASKS.map((t) => {
+                    {cleaningTasks.map((t) => {
                       const last = cleaningLastFor(t.key);
                       return (
                         <td key={t.key} style={{ textAlign: "center", padding: "6px 4px", borderBottom: "1px solid #333", color: "#888", fontSize: 11 }}>
@@ -3343,7 +3374,7 @@ export default function App() {
                   {coaches.filter((c) => cleaningParticipants.includes(c.id)).map((c) => (
                     <tr key={c.id}>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid #1e1e1e" }}>{c.name}</td>
-                      {CLEANING_TASKS.map((t) => (
+                      {cleaningTasks.map((t) => (
                         <td key={t.key} style={{ textAlign: "center", padding: "6px 4px", borderBottom: "1px solid #1e1e1e", color: "#4ECDC4" }}>
                           {cleaningLog.filter((r) => r.task === t.key && r.coachId === c.id).length}
                         </td>
@@ -3359,7 +3390,7 @@ export default function App() {
                 {cleaningLog.slice(0, 40).map((r) => (
                   <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
                     <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
-                      {CLEANING_TASKS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                      {cleaningTasks.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
                     </select>
                     <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
                     <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>
@@ -3745,7 +3776,7 @@ export default function App() {
           {isCoach && cleaningParticipants.length > 0 && (
             <div style={S.formCard}>
               <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
-              {CLEANING_TASKS.map((t) => {
+              {cleaningTasks.map((t) => {
                 const next = cleaningNextFor(t.key);
                 const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
                 const daysAgo = myLogs.length > 0 ? Math.round((new Date(formatDate(new Date())) - new Date(myLogs[0].date)) / 86400000) : null;
@@ -4211,13 +4242,13 @@ export default function App() {
               <thead>
                 <tr>
                   <th style={{ textAlign: "left", padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>教練</th>
-                  {CLEANING_TASKS.map((t) => <th key={t.key} style={{ padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>{t.label}</th>)}
+                  {cleaningTasks.map((t) => <th key={t.key} style={{ padding: "6px 4px", color: "#888", borderBottom: "1px solid #333" }}>{t.label}</th>)}
                 </tr>
               </thead>
               <tbody>
                 <tr>
                   <td style={{ padding: "6px 4px", borderBottom: "1px solid #333", color: "#888" }}>上次</td>
-                  {CLEANING_TASKS.map((t) => {
+                  {cleaningTasks.map((t) => {
                     const last = cleaningLastFor(t.key);
                     return (
                       <td key={t.key} style={{ textAlign: "center", padding: "6px 4px", borderBottom: "1px solid #333", color: "#888", fontSize: 11 }}>
@@ -4229,7 +4260,7 @@ export default function App() {
                 {coaches.filter((c) => cleaningParticipants.includes(c.id)).map((c) => (
                   <tr key={c.id}>
                     <td style={{ padding: "6px 4px", borderBottom: "1px solid #1e1e1e" }}>{c.name}</td>
-                    {CLEANING_TASKS.map((t) => (
+                    {cleaningTasks.map((t) => (
                       <td key={t.key} style={{ textAlign: "center", padding: "6px 4px", borderBottom: "1px solid #1e1e1e", color: "#4ECDC4" }}>
                         {cleaningLog.filter((r) => r.task === t.key && r.coachId === c.id).length}
                       </td>
@@ -4245,7 +4276,7 @@ export default function App() {
               {cleaningLog.slice(0, 40).map((r) => (
                 <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
                   <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
-                    {CLEANING_TASKS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                    {cleaningTasks.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
                   </select>
                   <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
                   <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>
