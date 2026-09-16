@@ -3679,29 +3679,6 @@ export default function App() {
             );
           })()}
 
-          {isCoach && cleaningParticipants.length > 0 && (
-            <div style={S.formCard}>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
-              {CLEANING_TASKS.map((t) => {
-                const next = cleaningNextFor(t.key);
-                const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
-                const daysAgo = myLogs.length > 0 ? Math.round((new Date(formatDate(new Date())) - new Date(myLogs[0].date)) / 86400000) : null;
-                const mineHint = daysAgo === null ? "你未做過" : daysAgo <= 0 ? "你今日做咗" : `你上次做已經係 ${daysAgo} 日前`;
-                return (
-                  <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222" }}>
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{t.label}</div>
-                      <div style={S.assistHint}>下一個：{next ? next.name : "—"}</div>
-                      {cleaningParticipants.includes(currentUser.id) && <div style={{ ...S.assistHint, color: "#666" }}>{mineHint}</div>}
-                    </div>
-                    <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>✓ 我啱啱做咗</button>
-                  </div>
-                );
-              })}
-              <button style={{ ...S.linkBtn, marginTop: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
-            </div>
-          )}
-
           {isCoach && (() => {
             // 第0.2項：快速Book表格——教練自己book用嘅表格式輸入，取代/補充grid點格仔。用返confirmBook同一套驗證同Pass邏輯，唔開新規則
             const qbDate = quickBook.date || formatDate(new Date());
@@ -3764,6 +3741,29 @@ export default function App() {
               </div>
             );
           })()}
+
+          {isCoach && cleaningParticipants.length > 0 && (
+            <div style={S.formCard}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
+              {CLEANING_TASKS.map((t) => {
+                const next = cleaningNextFor(t.key);
+                const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
+                const daysAgo = myLogs.length > 0 ? Math.round((new Date(formatDate(new Date())) - new Date(myLogs[0].date)) / 86400000) : null;
+                const mineHint = daysAgo === null ? "你未做過" : daysAgo <= 0 ? "你今日做咗" : `你上次做已經係 ${daysAgo} 日前`;
+                return (
+                  <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222" }}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{t.label}</div>
+                      <div style={S.assistHint}>下一個：{next ? next.name : "—"}</div>
+                      {cleaningParticipants.includes(currentUser.id) && <div style={{ ...S.assistHint, color: "#666" }}>{mineHint}</div>}
+                    </div>
+                    <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>✓ 我啱啱做咗</button>
+                  </div>
+                );
+              })}
+              <button style={{ ...S.linkBtn, marginTop: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
+            </div>
+          )}
         </div>
       )}
 
