@@ -4273,15 +4273,22 @@ export default function App() {
           <p style={{ ...S.label, marginBottom: 6 }}>最近記錄</p>
           {cleaningLog.length === 0 ? <p style={S.emptyText}>暫無記錄</p> : (
             <div style={{ maxHeight: 220, overflowY: "auto" }}>
-              {cleaningLog.slice(0, 40).map((r) => (
-                <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
-                  <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
-                    {cleaningTasks.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                  </select>
-                  <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
-                  <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>
-                </div>
-              ))}
+              {cleaningLog.slice(0, 40).map((r) => {
+                const isMine = r.coachId === currentUser.id; // 教練淨係改得自己嘅記錄，其他人嘅得返睇（Admin個view唔受呢個限制）
+                return (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
+                    {isMine ? (
+                      <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
+                        {cleaningTasks.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                      </select>
+                    ) : (
+                      <span style={{ flexShrink: 0, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cleaningTasks.find((t) => t.key === r.task)?.label || r.task}</span>
+                    )}
+                    <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
+                    {isMine && <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>}
+                  </div>
+                );
+              })}
             </div>
           )}
           <button style={{ ...S.modalCancel, width: "100%", marginTop: 16 }} onClick={() => setCleaningLogModal(false)}>關閉</button>
