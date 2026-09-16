@@ -697,15 +697,26 @@ export default function App() {
     setDrinkProducts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  // ---- 清潔輪流：4樣獨立輪，「下一個」=呢樣嘢做得最少嘅參與教練，任何參與教練隨時可以自己標記完成（2026-09定案）----
+  // ---- 清潔輪流：每樣工作獨立輪，「下一個」=呢樣嘢做得最少嘅參與教練，任何參與教練隨時可以自己標記完成（2026-09定案；2026-09擴充：每樣工作可以獨立揀參與教練，唔再係全部工作共用一個名單）----
+  // taskParticipants：工作本身有設定自己嘅participants就用，未設定過（舊資料/新裝）先撳返舊有嘅全域cleaningParticipants做fallback，保證升級後原有設定唔會消失
+  const taskParticipants = (task) => Array.isArray(task?.participants) ? task.participants : cleaningParticipants;
+  const allCleaningParticipantIds = () => [...new Set(cleaningTasks.flatMap((t) => taskParticipants(t)))]; // 攞晒所有工作嘅參與教練聯集，畀記錄表決定要顯示邊幾行
   const cleaningNextFor = (taskKey) => {
-    const participants = coaches.filter((c) => cleaningParticipants.includes(c.id));
+    const task = cleaningTasks.find((t) => t.key === taskKey);
+    const participants = coaches.filter((c) => taskParticipants(task).includes(c.id));
     if (participants.length === 0) return null;
     const counts = participants.map((c) => ({ coach: c, count: cleaningLog.filter((r) => r.task === taskKey && r.coachId === c.id).length }));
     counts.sort((a, b) => a.count - b.count);
     return counts[0].coach;
   };
   const cleaningLastFor = (taskKey) => cleaningLog.find((r) => r.task === taskKey) || null; // cleaningLog 由新到舊排，第一筆就係上次完成
+  const toggleCleaningTaskParticipant = (taskKey, coachId, checked) => {
+    setCleaningTasks((prev) => prev.map((t) => {
+      if (t.key !== taskKey) return t;
+      const current = taskParticipants(t);
+      return { ...t, participants: checked ? [...current, coachId] : current.filter((id) => id !== coachId) };
+    }));
+  };
 
   // ---- 試堂輪流：Book試堂嗰陣自動建議「教得最少」嘅參與教練，直接攞現有試堂booking記錄嚟計，唔開新log（2026-09新增）----
   const trialNextFor = () => {
@@ -738,7 +749,7 @@ export default function App() {
     if (!name) { showToast("請輸入工作名稱", "error"); return; }
     if (cleaningTasks.some((t) => t.label === name)) { showToast("已經有呢個名嘅工作", "error"); return; }
     const key = "ct" + Date.now() + "-" + Math.random().toString(36).slice(2);
-    setCleaningTasks((prev) => [...prev, { key, label: name }]);
+    setCleaningTasks((prev) => [...prev, { key, label: name, participants: [] }]); // 新工作預設冇人參與，admin要自己揀
   };
   const removeCleaningTask = (key) => {
     setCleaningTasks((prev) => prev.filter((t) => t.key !== key));
@@ -2690,14 +2701,25 @@ export default function App() {
 
                     <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>清潔輪流</h2>
                     <div style={S.formCard}>
-                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>揀邊啲教練參與「{cleaningTasks.map((t) => t.label).join("/") || "（未有工作項目）"}」輪流。每樣嘢獨立輪，「下一個」自動計做得最少嗰位，冇固定週期，教練自己喺首頁隨時標記完成。</p>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>每樣清潔工作獨立輪流，可以各自揀唔同嘅參與教練（例如「倒垃圾」得A、B輪，「吸塵」得C、D輪）。「下一個」自動計嗰樣工作入面做得最少嗰位，冇固定週期，教練自己喺首頁隨時標記完成。</p>
                       <label style={{ ...S.label, marginTop: 4 }}>工作項目</label>
                       {cleaningTasks.length === 0 ? <p style={S.emptyText}>暫無工作項目，喺下面新增一個先</p> : (
-                        <div style={{ marginBottom: 10 }}>
+                        <div style={{ marginBottom: 14 }}>
                           {cleaningTasks.map((t) => (
-                            <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #222" }}>
-                              <span>{t.label}</span>
-                              <button style={S.delBtn} onClick={() => removeCleaningTask(t.key)}>刪</button>
+                            <div key={t.key} style={{ padding: "10px 0", borderBottom: "1px solid #222" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                                <span style={{ fontWeight: 600 }}>{t.label}</span>
+                                <button style={S.delBtn} onClick={() => removeCleaningTask(t.key)}>刪</button>
+                              </div>
+                              <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 6 }}>
+                                {coaches.map((c) => (
+                                  <label key={c.id} style={{ ...S.checkLabel, fontSize: 13 }}>
+                                    <input type="checkbox" checked={taskParticipants(t).includes(c.id)}
+                                      onChange={(e) => toggleCleaningTaskParticipant(t.key, c.id, e.target.checked)} /> {c.name}
+                                  </label>
+                                ))}
+                              </div>
+                              {taskParticipants(t).length === 0 && <p style={{ ...S.assistHint, marginTop: 6, color: "#FFB347" }}>未揀參與教練，首頁唔會顯示「下一個」建議</p>}
                             </div>
                           ))}
                         </div>
@@ -2707,15 +2729,6 @@ export default function App() {
                           onChange={(e) => setNewCleaningTaskLabel(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") { addCleaningTask(newCleaningTaskLabel); setNewCleaningTaskLabel(""); } }} />
                         <button style={{ ...S.creditBtn, whiteSpace: "nowrap" }} onClick={() => { addCleaningTask(newCleaningTaskLabel); setNewCleaningTaskLabel(""); }}>新增</button>
-                      </div>
-                      <label style={S.label}>參與教練</label>
-                      <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 8 }}>
-                        {coaches.map((c) => (
-                          <label key={c.id} style={S.checkLabel}>
-                            <input type="checkbox" checked={cleaningParticipants.includes(c.id)}
-                              onChange={(e) => setCleaningParticipants((prev) => e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id))} /> {c.name}
-                          </label>
-                        ))}
                       </div>
                       <button style={{ ...S.smallBtn, marginTop: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
                     </div>
@@ -3434,7 +3447,7 @@ export default function App() {
                       );
                     })}
                   </tr>
-                  {coaches.filter((c) => cleaningParticipants.includes(c.id)).map((c) => (
+                  {coaches.filter((c) => allCleaningParticipantIds().includes(c.id)).map((c) => (
                     <tr key={c.id}>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid #1e1e1e" }}>{c.name}</td>
                       {cleaningTasks.map((t) => (
@@ -3836,7 +3849,7 @@ export default function App() {
             );
           })()}
 
-          {isCoach && cleaningParticipants.length > 0 && (
+          {isCoach && cleaningTasks.length > 0 && (
             <div style={S.formCard}>
               <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
               {cleaningTasks.map((t) => {
@@ -3849,7 +3862,7 @@ export default function App() {
                     <div>
                       <div style={{ fontWeight: 600 }}>{t.label}</div>
                       <div style={S.assistHint}>下一個：{next ? next.name : "—"}</div>
-                      {cleaningParticipants.includes(currentUser.id) && <div style={{ ...S.assistHint, color: "#666" }}>{mineHint}</div>}
+                      {taskParticipants(t).includes(currentUser.id) && <div style={{ ...S.assistHint, color: "#666" }}>{mineHint}</div>}
                     </div>
                     <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>✓ 我啱啱做咗</button>
                   </div>
@@ -4320,7 +4333,7 @@ export default function App() {
                     );
                   })}
                 </tr>
-                {coaches.filter((c) => cleaningParticipants.includes(c.id)).map((c) => (
+                {coaches.filter((c) => allCleaningParticipantIds().includes(c.id)).map((c) => (
                   <tr key={c.id}>
                     <td style={{ padding: "6px 4px", borderBottom: "1px solid #1e1e1e" }}>{c.name}</td>
                     {cleaningTasks.map((t) => (
