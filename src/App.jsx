@@ -85,6 +85,7 @@ export default function App() {
   const [calScale, setCalScale] = useState(() => loadCalScale());
   const [myBookingsView, setMyBookingsView] = useState("list"); // list | upcoming | completed | cancelled
   const [myBookingsSortMode, setMyBookingsSortMode] = useState("newest"); // newest | closest（距今日最近排最頂）
+  const [myBookingsDateFilter, setMyBookingsDateFilter] = useState(""); // "" = 唔篩日期；否則 YYYY-MM-DD，四個分頁都套用（2026-09新增）
   const [studentDrafts, setStudentDrafts] = useState({}); // 學生「每堂收費」／「剩餘堂數」輸入緊嘅暫存字串，等撳delete可以留空唔會即刻變返0，key: `${name}_${field}`
   const updateCalScale = (v) => { setCalScale(v); saveCalScale(v); };
   const [bookModal, setBookModal] = useState(null);   // { date, time }
@@ -1830,6 +1831,10 @@ export default function App() {
   });
   myBookings.sort((a, b) => `${b.date}${b.start}`.localeCompare(`${a.date}${a.start}`));
   const myBookingsThisMonthCount = myBookings.filter((b) => monthKey(b.date) === monthKey(formatDate(new Date()))).length;
+  // 四個分頁（列表/未完成/已完成/已取消）各自嘅數量，畀分頁掣度顯示個別badge用（2026-09新增，唔受月份/日期篩選影響，永遠反映該分頁全部記錄嘅總數）
+  const myBookingsUpcomingCount = myBookings.filter((b) => new Date(`${b.date}T${b.start}:00`).getTime() >= Date.now()).length;
+  const myBookingsCompletedCount = myBookings.length - myBookingsUpcomingCount;
+  const myCancelledCount = cancelLog.filter((r) => String(r.coachId) === String(currentUser?.id)).length;
   // 「未完成」／「已完成」分頁：開始時間已過(hoursUntil<0)即係「已完成」，同app其他地方嘅isPast定義一致
   const myBookingsFilteredByStatus = (() => {
     if (myBookingsView !== "upcoming" && myBookingsView !== "completed") return myBookings;
@@ -1848,6 +1853,8 @@ export default function App() {
     const done = myBookingsFilteredByStatus.filter((b) => startMs(b) < nowMs).sort((a, b) => startMs(b) - startMs(a));
     return [...upcoming, ...done];
   })();
+  // 揀咗特定日期就再篩多次，四個分頁（連已取消）共用同一個日期篩選（2026-09新增）
+  const myBookingsDisplayed = myBookingsDateFilter ? myBookingsSorted.filter((b) => b.date === myBookingsDateFilter) : myBookingsSorted;
 
   // 教練近3個月實際收入（只計有填學生名嘅堂，用 snapshot 收費；扣除租場費用）+ 各學生上堂紀錄（近3個月）
   const myIncomeReport = (() => {
@@ -4011,10 +4018,10 @@ export default function App() {
           <div style={S.flexBetween}>
             <h2 style={S.sectionTitle}>我的預約記錄</h2>
             <div style={S.segRow}>
-              <button style={myBookingsView === "list" ? S.segActive : S.seg} onClick={() => setMyBookingsView("list")}>📋 列表</button>
-              <button style={myBookingsView === "upcoming" ? S.segActive : S.seg} onClick={() => setMyBookingsView("upcoming")}>⏳ 未完成</button>
-              <button style={myBookingsView === "completed" ? S.segActive : S.seg} onClick={() => setMyBookingsView("completed")}>✅ 已完成</button>
-              <button style={myBookingsView === "cancelled" ? S.segActive : S.seg} onClick={() => setMyBookingsView("cancelled")}>🗑️ 已取消</button>
+              <button style={myBookingsView === "list" ? S.segActive : S.seg} onClick={() => setMyBookingsView("list")}>📋 列表 {myBookings.length > 0 && <span style={S.badge}>{myBookings.length}</span>}</button>
+              <button style={myBookingsView === "upcoming" ? S.segActive : S.seg} onClick={() => setMyBookingsView("upcoming")}>⏳ 未完成 {myBookingsUpcomingCount > 0 && <span style={S.badge}>{myBookingsUpcomingCount}</span>}</button>
+              <button style={myBookingsView === "completed" ? S.segActive : S.seg} onClick={() => setMyBookingsView("completed")}>✅ 已完成 {myBookingsCompletedCount > 0 && <span style={S.badge}>{myBookingsCompletedCount}</span>}</button>
+              <button style={myBookingsView === "cancelled" ? S.segActive : S.seg} onClick={() => setMyBookingsView("cancelled")}>🗑️ 已取消 {myCancelledCount > 0 && <span style={S.badge}>{myCancelledCount}</span>}</button>
             </div>
           </div>
           {myBookingsView !== "cancelled" && (
@@ -4023,11 +4030,16 @@ export default function App() {
               <button style={myBookingsSortMode === "closest" ? S.segActive : S.seg} onClick={() => setMyBookingsSortMode("closest")}>距今日最近</button>
             </div>
           )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+            <input type="date" style={{ ...S.input, width: "auto" }} value={myBookingsDateFilter} onChange={(e) => setMyBookingsDateFilter(e.target.value)} />
+            {myBookingsDateFilter && <button style={S.seg} onClick={() => setMyBookingsDateFilter("")}>✕ 清除日期</button>}
+          </div>
           {myBookingsView === "cancelled" ? (() => {
-            const myCancelled = cancelLog.filter((r) => String(r.coachId) === String(currentUser.id)).sort((a, b) => (b.cancelledAt || "").localeCompare(a.cancelledAt || ""));
+            const myCancelledAll = cancelLog.filter((r) => String(r.coachId) === String(currentUser.id)).sort((a, b) => (b.cancelledAt || "").localeCompare(a.cancelledAt || ""));
+            const myCancelled = myBookingsDateFilter ? myCancelledAll.filter((r) => r.date === myBookingsDateFilter) : myCancelledAll;
             return (
               <div style={{ marginTop: 14 }}>
-                {myCancelled.length === 0 ? <p style={S.emptyText}>暫無已取消嘅記錄</p> : (
+                {myCancelled.length === 0 ? <p style={S.emptyText}>{myBookingsDateFilter ? "呢日冇已取消嘅記錄" : "暫無已取消嘅記錄"}</p> : (
                   <div style={S.bookingList}>
                     {myCancelled.map((r, i) => (
                       <div key={i} style={S.bookingItem}>
@@ -4047,9 +4059,9 @@ export default function App() {
                 <p style={S.assistHint}>※ 顯示所有同你有關嘅取消記錄，唔理係你自己、Admin，定係副管理員取消嘅。</p>
               </div>
             );
-          })() : myBookingsSorted.length === 0 ? <p style={S.emptyText}>{myBookingsView === "completed" ? "暫無已完成嘅預約" : myBookingsView === "upcoming" ? "暫無未完成嘅預約" : "你還未有預約"}</p> : (
+          })() : myBookingsDisplayed.length === 0 ? <p style={S.emptyText}>{myBookingsDateFilter ? "呢日冇符合嘅預約" : myBookingsView === "completed" ? "暫無已完成嘅預約" : myBookingsView === "upcoming" ? "暫無未完成嘅預約" : "你還未有預約"}</p> : (
             <div style={S.bookingList}>
-              {myBookingsSorted.map(({ date, start, hours, type, charterType, coachName, students, signatures, createdAt, bookedBy }, i) => {
+              {myBookingsDisplayed.map(({ date, start, hours, type, charterType, coachName, students, signatures, createdAt, bookedBy }, i) => {
                 const hrs = hoursUntil(date, start);
                 const isPast = hrs < 0;
                 const isFilming = type === "charter" && charterType === "filming";
