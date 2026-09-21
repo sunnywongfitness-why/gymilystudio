@@ -719,7 +719,7 @@ export default function App() {
     }));
   };
 
-  // ---- 試堂輪流：Book試堂嗰陣自動建議「教得最少」嘅參與教練，直接攞現有試堂booking記錄嚟計，唔開新log（2026-09新增）----
+  // ---- 試堂輪流：Book試堂嗰陣自動建議「教得最少」嘅參與教練，直接攞現有試堂booking記錄嚟計，唔開新log（2026-09新增；2026-09擴充：可分「經公司／個人」，個人試堂唔計落公平輪流）----
   const trialNextFor = () => {
     const participants = coaches.filter((c) => trialParticipants.includes(c.id));
     if (participants.length === 0) return null;
@@ -727,7 +727,7 @@ export default function App() {
     Object.entries(bookings).forEach(([k, arr]) => {
       const date = k.split("_")[0];
       arr.forEach((v) => {
-        if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName) {
+        if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName && v.trialSource !== "personal") {
           trialCounts[v.coachName] = (trialCounts[v.coachName] || 0) + 1;
         }
       });
@@ -954,7 +954,7 @@ export default function App() {
 
   // ADMIN: place a rental (包場/小組=全場2位, 試堂=1位), price editable
   const confirmCharter = () => {
-    const { date, time, charterType, price, coachName } = charterModal;
+    const { date, time, charterType, price, coachName, trialSource } = charterModal;
     const hours = Number(charterModal.hours) || 0;
     if (hours <= 0) { showToast("請輸入有效時長", "error"); return; }
     if (isClosedDay(date)) { showToast("休息日", "error"); return; }
@@ -966,7 +966,7 @@ export default function App() {
       const err = canPlace(date, time, hours, need);
       if (err) { showToast(err, "error"); return; }
       const slots = slotsFor(time, hours);
-      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: nowStamp() };
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", trialSource: charterType === "trial" ? (trialSource || "company") : undefined, bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: nowStamp() };
       setBookings((prev) => {
         const u = { ...prev };
         slots.forEach((s) => { u[`${date}_${s}`] = [...(u[`${date}_${s}`] || []), entry]; });
@@ -987,7 +987,7 @@ export default function App() {
       const err = canPlace(wDate, time, hours, need);
       if (err) { skippedDates.push(`${wDate}（${err}）`); continue; }
       const wSlots = slotsFor(time, hours);
-      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: nowStamp() };
+      const entry = { coachId: 0, start: time, hours, type: "charter", charterType, price: amt, coachName: coachName || "", trialSource: charterType === "trial" ? (trialSource || "company") : undefined, bookedBy: currentUser.role === "subadmin" ? `subadmin:${currentUser.name}` : "admin", createdAt: nowStamp() };
       wSlots.forEach((s) => {
         const key = `${wDate}_${s}`;
         newBookingsBySlot[key] = [...(newBookingsBySlot[key] || []), entry];
@@ -2501,6 +2501,7 @@ export default function App() {
                           <div style={S.recDetail}>
                             <div>類型：{type === "charter" ? rentalFull(charterType) : type === "duo" ? "一對二" : "一對一"}</div>
                             <div>收費：{type === "charter" && charterType === "trial" ? "免費" : `$${price}`}</div>
+                            {type === "charter" && charterType === "trial" && <div>來源：{b.trialSource === "personal" ? "個人（唔計落輪流）" : "經公司"}</div>}
                             {type !== "charter" && <div>扣時數：{b.passCost ?? hours} 小時</div>}
                             {students && students.length > 0 && <div>學生：{students.join("、")}</div>}
                             <div>落單時間：{b.createdAt || "—（舊記錄）"}</div>
@@ -2754,16 +2755,21 @@ export default function App() {
                       </div>
                       {trialParticipants.length > 0 && (
                         <div style={{ marginTop: 14 }}>
-                          <label style={S.label}>已教試堂次數</label>
+                          <label style={S.label}>已教試堂次數（經公司，用嚟計輪流）</label>
                           {coaches.filter((c) => trialParticipants.includes(c.id)).map((c) => {
-                            let count = 0;
+                            let count = 0, personalCount = 0;
                             Object.entries(bookings).forEach(([k, arr]) => {
                               const date = k.split("_")[0];
-                              arr.forEach((v) => { if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName === c.name) count++; });
+                              arr.forEach((v) => {
+                                if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName === c.name) {
+                                  if (v.trialSource === "personal") personalCount++; else count++;
+                                }
+                              });
                             });
                             return (
                               <div key={c.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e" }}>
-                                <span>{c.name}</span><span style={{ color: "#4ECDC4" }}>{count} 堂</span>
+                                <span>{c.name}</span>
+                                <span style={{ color: "#4ECDC4" }}>{count} 堂{personalCount > 0 && <span style={{ color: "#666", marginLeft: 6 }}>（另有個人 {personalCount} 堂，唔計落輪流）</span>}</span>
                               </div>
                             );
                           })}
@@ -3146,6 +3152,16 @@ export default function App() {
                 </p>
               );
             })()}
+            {charterModal.charterType === "trial" && (
+              <>
+                <label style={{ ...S.label, marginTop: 14 }}>試堂來源</label>
+                <div style={S.segRow}>
+                  <button style={(charterModal.trialSource || "company") === "company" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, trialSource: "company" })}>經公司</button>
+                  <button style={charterModal.trialSource === "personal" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, trialSource: "personal" })}>個人</button>
+                </div>
+                <p style={{ ...S.assistHint, marginTop: 6 }}>「個人」試堂（教練自己帶嚟嘅客）唔會計落公平輪流嘅次數，唔會影響「下一個」自動建議。</p>
+              </>
+            )}
 
             {charterModal.charterType === "clean" && (
               <>
@@ -3186,7 +3202,7 @@ export default function App() {
             <p style={S.modalText}>{slotChoiceModal.date}　{slotChoiceModal.time}</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <button style={S.loginBtn} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setAdminCoachBookModal({ date, time, coachId: coaches[0]?.id || null, sessionType: "solo", hours: 1, students: [] }); }}>👤 代教練 Book 堂</button>
-              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff" }} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "" }); }}>🏟️ 包場／小組／試堂</button>
+              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff" }} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "", trialSource: "company" }); }}>🏟️ 包場／小組／試堂</button>
             </div>
             <button style={{ ...S.modalCancel, marginTop: 14, width: "100%" }} onClick={() => setSlotChoiceModal(null)}>取消</button>
           </div></div>
