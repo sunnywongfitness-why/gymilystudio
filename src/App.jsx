@@ -271,7 +271,9 @@ export default function App() {
     if (s === lastSyncedRef.current) return; // 同雲端一樣，唔使寫
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    // attemptSync：抽埋做named function，寫入失敗（例如斷網）嗰陣可以自動排隊重試，
+    // 唔使再靠「等你落次郁第二樣嘢先再觸發」——之前呢個做法會令失敗嗰筆嘢一直淨係留喺本機、雲端遲遲收唔到（2026-09修正）
+    const attemptSync = async (retry = 0) => {
       setSyncState("connecting");
       // 寫入前先重新讀一次雲端而家嘅內容：如果同「我哋上次同步嗰刻」已經唔一樣，
       // 即係話呢段時間內有第二部裝置都寫入過——唔可以再盲目成份bundle覆寫，會整走人哋嘅改動（lost update）。
@@ -319,8 +321,13 @@ export default function App() {
       const finalS = stableStringify(toSave);
       const ok = await cloudSave(toSave);
       if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
-      else { setSyncState("error"); } // 失敗唔更新lastSyncedRef，等落次有變動會自然重試
-    }, 500);
+      else {
+        setSyncState("error");
+        // 失敗唔更新lastSyncedRef；自動隔一排（3s、6s、12s...封頂30s）再試，試夠5次為止
+        if (retry < 5) saveTimer.current = setTimeout(() => attemptSync(retry + 1), Math.min(3000 * 2 ** retry, 30000));
+      }
+    };
+    saveTimer.current = setTimeout(() => attemptSync(0), 500);
   }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
