@@ -3859,6 +3859,7 @@ export default function App() {
           {isCoach && cleaningTasks.length > 0 && (
             <div style={S.formCard}>
               <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
+              <button style={{ ...S.linkBtn, fontSize: 15, fontWeight: 600, marginBottom: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
               {cleaningTasks.map((t) => {
                 const next = cleaningNextFor(t.key);
                 const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
@@ -3875,7 +3876,6 @@ export default function App() {
                   </div>
                 );
               })}
-              <button style={{ ...S.linkBtn, marginTop: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
             </div>
           )}
         </div>
