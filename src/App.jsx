@@ -131,6 +131,8 @@ export default function App() {
   const [drinkQrModal, setDrinkQrModal] = useState(null); // { items, amount } 撳「下一步」之後顯示收款QR畀學生睇
   const [newDrinkForm, setNewDrinkForm] = useState({ name: "", price: "" }); // admin新增產品用嘅暫存輸入
   const [newCleaningTaskLabel, setNewCleaningTaskLabel] = useState(""); // admin新增清潔工作用嘅暫存輸入
+  const [expandedTemplateIds, setExpandedTemplateIds] = useState([]); // 文本範本庫摺埋咗邊幾個已經展開（2026-09新增，縮短教練工具版面）
+  const [expandedCleaningTaskKeys, setExpandedCleaningTaskKeys] = useState([]); // 清潔輪流工作摺埋咗邊幾個已經展開（2026-09新增）
   const [syncState, setSyncState] = useState(cloudEnabled ? "connecting" : "local"); // connecting | synced | local | error
 
   // 同步用：記住最後一次「已儲存／已收到」嘅內容，避免回音造成無限迴圈
@@ -2378,9 +2380,9 @@ export default function App() {
                     <div style={S.bookingTime}>Pass時數 {c.credits - c.used}/{c.credits} 小時　代book每堂 ${c.rate}　密碼 {showPasswords ? c.password : "••••"}</div>
                   </div>
                   <button style={S.creditBtn} onClick={() => setAddCreditModal({ coachId: c.id, qty: 1, date: formatDate(new Date()), expiryDate: "", passType: "" })}>+ 時數</button>
-                  <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00" })}>⚠️ 提醒補book</button>
-                  <button style={S.smallBtn} onClick={() => setAdjustUsedModal({ coachId: c.id, used: c.used, note: "" })}>🔧 調整已用時數</button>
-                  <button style={S.smallBtn} onClick={() => setPackageUsageModal(c.id)}>📦 Package使用情況</button>
+                  <button style={S.smallBtn} onClick={() => setRetroReminderModal({ coachId: c.id, coachName: c.name, date: formatDate(new Date()), start: "19:00" })}>補book</button>
+                  <button style={S.smallBtn} onClick={() => setAdjustUsedModal({ coachId: c.id, used: c.used, note: "" })}>調時數</button>
+                  <button style={S.smallBtn} onClick={() => setPackageUsageModal(c.id)}>用量</button>
                   <button style={S.smallBtn} onClick={() => setEditCoach(c)}>編輯</button>
                   <button style={S.delBtn} onClick={() => setDelCoachModal(c)}>刪</button>
                 </div>
@@ -2676,13 +2678,25 @@ export default function App() {
 
                     <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>文本範本庫</h2>
                     <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>可用 <code>{"{{教練名}}"}</code>、<code>{"{{時數}}"}</code> 呢類placeholder，喺下面「發送文本」揀教練嗰陣會自動代入（時數冇現成數字，留喺預覽度自己手打）。</p>
-                    {textTemplates.map((t) => (
+                    {textTemplates.map((t) => {
+                      const open = expandedTemplateIds.includes(t.id);
+                      return (
                       <div key={t.id} style={S.formCard}>
-                        <Field label="範本名稱"><input style={S.input} value={t.name} onChange={(e) => updateTemplate(t.id, "name", e.target.value)} /></Field>
-                        <Field label="內文"><textarea style={{ ...S.input, minHeight: 140, resize: "vertical" }} value={t.content} onChange={(e) => updateTemplate(t.id, "content", e.target.value)} /></Field>
-                        <button style={{ ...S.delBtn }} onClick={() => removeTemplate(t.id)}>刪除呢個範本</button>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+                          onClick={() => setExpandedTemplateIds((prev) => open ? prev.filter((id) => id !== t.id) : [...prev, t.id])}>
+                          <span style={{ fontWeight: 600 }}>{t.name || "（未命名範本）"}</span>
+                          <span style={{ color: "#888", fontSize: 13 }}>{open ? "收起 ▲" : "展開 ▼"}</span>
+                        </div>
+                        {open && (
+                          <div style={{ marginTop: 12 }}>
+                            <Field label="範本名稱"><input style={S.input} value={t.name} onChange={(e) => updateTemplate(t.id, "name", e.target.value)} /></Field>
+                            <Field label="內文"><textarea style={{ ...S.input, minHeight: 140, resize: "vertical" }} value={t.content} onChange={(e) => updateTemplate(t.id, "content", e.target.value)} /></Field>
+                            <button style={{ ...S.delBtn }} onClick={() => removeTemplate(t.id)}>刪除呢個範本</button>
+                          </div>
+                        )}
                       </div>
-                    ))}
+                      );
+                    })}
                     <div style={S.formCard}>
                       <Field label="新範本名稱"><input style={S.input} placeholder="例如：續約提醒" value={newTemplateForm.name} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, name: e.target.value })} /></Field>
                       <Field label="新範本內文"><textarea style={{ ...S.input, minHeight: 100, resize: "vertical" }} value={newTemplateForm.content} onChange={(e) => setNewTemplateForm({ ...newTemplateForm, content: e.target.value })} /></Field>
@@ -2720,23 +2734,35 @@ export default function App() {
                       <label style={{ ...S.label, marginTop: 4 }}>工作項目</label>
                       {cleaningTasks.length === 0 ? <p style={S.emptyText}>暫無工作項目，喺下面新增一個先</p> : (
                         <div style={{ marginBottom: 14 }}>
-                          {cleaningTasks.map((t) => (
+                          {cleaningTasks.map((t) => {
+                            const open = expandedCleaningTaskKeys.includes(t.key);
+                            const n = taskParticipants(t).length;
+                            return (
                             <div key={t.key} style={{ padding: "10px 0", borderBottom: "1px solid #222" }}>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                                <span style={{ fontWeight: 600 }}>{t.label}</span>
-                                <button style={S.delBtn} onClick={() => removeCleaningTask(t.key)}>刪</button>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+                                onClick={() => setExpandedCleaningTaskKeys((prev) => open ? prev.filter((k) => k !== t.key) : [...prev, t.key])}>
+                                <span style={{ fontWeight: 600 }}>{t.label} <span style={{ fontWeight: 400, fontSize: 12, color: n === 0 ? "#FFB347" : "#888" }}>（{n === 0 ? "未揀教練" : `${n}位`}）</span></span>
+                                <span style={{ color: "#888", fontSize: 13 }}>{open ? "收起 ▲" : "展開 ▼"}</span>
                               </div>
-                              <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 6 }}>
-                                {coaches.map((c) => (
-                                  <label key={c.id} style={{ ...S.checkLabel, fontSize: 13 }}>
-                                    <input type="checkbox" checked={taskParticipants(t).includes(c.id)}
-                                      onChange={(e) => toggleCleaningTaskParticipant(t.key, c.id, e.target.checked)} /> {c.name}
-                                  </label>
-                                ))}
-                              </div>
-                              {taskParticipants(t).length === 0 && <p style={{ ...S.assistHint, marginTop: 6, color: "#FFB347" }}>未揀參與教練，首頁唔會顯示「下一個」建議</p>}
+                              {open && (
+                                <div style={{ marginTop: 10 }}>
+                                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                                    <button style={S.delBtn} onClick={() => removeCleaningTask(t.key)}>刪除呢個工作</button>
+                                  </div>
+                                  <div style={{ ...S.checkRow, flexWrap: "wrap", rowGap: 6 }}>
+                                    {coaches.map((c) => (
+                                      <label key={c.id} style={{ ...S.checkLabel, fontSize: 13 }}>
+                                        <input type="checkbox" checked={taskParticipants(t).includes(c.id)}
+                                          onChange={(e) => toggleCleaningTaskParticipant(t.key, c.id, e.target.checked)} /> {c.name}
+                                      </label>
+                                    ))}
+                                  </div>
+                                  {n === 0 && <p style={{ ...S.assistHint, marginTop: 6, color: "#FFB347" }}>未揀參與教練，首頁唔會顯示「下一個」建議</p>}
+                                </div>
+                              )}
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
