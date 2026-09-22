@@ -105,6 +105,7 @@ export default function App() {
   const [cleaningTasks, setCleaningTasks] = useState(() => persisted("cleaningTasks", DEFAULT_CLEANING_TASKS)); // 清潔輪流嘅工作項目，admin可自行新增/刪除
   const [cleaningLog, setCleaningLog] = useState(() => persisted("cleaningLog", [])); // {id, task, coachId, coachName, date, at} 逐筆清潔完成記錄，4樣嘢獨立輪（2026-09定案）
   const [cleaningLogModal, setCleaningLogModal] = useState(false);
+  const [expandedCleaningKeys, setExpandedCleaningKeys] = useState([]); // 教練首頁清潔輪流卡：已追上嘅工作預設收埋，呢度記低邊啲被手動撳開睇（純UI狀態，唔使同步/persist）
   const [drinkProducts, setDrinkProducts] = useState(() => persisted("drinkProducts", [])); // {id, name, price} 飲品產品清單，admin喺設定維護
   // textTemplates嘅預設範本合併：saved data入面冇嘅新增DEFAULT_TEXT_TEMPLATES項目（例如之後新加嘅⑦），自動補返，唔覆蓋user已編輯嘅內容
   const mergeTemplateDefaults = (saved) => {
@@ -707,17 +708,18 @@ export default function App() {
     setDrinkProducts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  // ---- 清潔輪流：每樣工作獨立輪，「下一個」=呢樣嘢做得最少嘅參與教練，任何參與教練隨時可以自己標記完成（2026-09定案；2026-09擴充：每樣工作可以獨立揀參與教練，唔再係全部工作共用一個名單）----
+  // ---- 清潔輪流：每樣工作獨立輪，任何參與教練隨時可以自己標記完成（2026-09定案；2026-09擴充：每樣工作可以獨立揀參與教練，唔再係全部工作共用一個名單；2026-09再擴充：教練首頁改做逐個「完成」掣，去咗「下一個」指名建議，改用自己喺呢個task做落嘅次數係咪追平/落後嚟自動排序＋收埋，唔會顯示任何評語文字）----
   // taskParticipants：工作本身有設定自己嘅participants就用，未設定過（舊資料/新裝）先撳返舊有嘅全域cleaningParticipants做fallback，保證升級後原有設定唔會消失
   const taskParticipants = (task) => Array.isArray(task?.participants) ? task.participants : cleaningParticipants;
   const allCleaningParticipantIds = () => [...new Set(cleaningTasks.flatMap((t) => taskParticipants(t)))]; // 攞晒所有工作嘅參與教練聯集，畀記錄表決定要顯示邊幾行
-  const cleaningNextFor = (taskKey) => {
-    const task = cleaningTasks.find((t) => t.key === taskKey);
-    const participants = coaches.filter((c) => taskParticipants(task).includes(c.id));
-    if (participants.length === 0) return null;
-    const counts = participants.map((c) => ({ coach: c, count: cleaningLog.filter((r) => r.task === taskKey && r.coachId === c.id).length }));
-    counts.sort((a, b) => a.count - b.count);
-    return counts[0].coach;
+  const cleaningCountFor = (taskKey, coachId) => cleaningLog.filter((r) => r.task === taskKey && r.coachId === coachId).length;
+  // 淨係比較「登入緊嗰個教練自己」喺呢個task做落嘅次數，同其他參與教練比較：自己次數係最少（或並列最少）先算「值得留意」，用嚟自動置頂＋展開；唔會透露邊個教練落後，純粹自己睇自己嘅狀態
+  const isMyCleaningTaskDue = (t) => {
+    const participants = taskParticipants(t);
+    if (!currentUser || !participants.includes(currentUser.id)) return false;
+    const counts = coaches.filter((c) => participants.includes(c.id)).map((c) => cleaningCountFor(t.key, c.id));
+    if (counts.length === 0) return false;
+    return cleaningCountFor(t.key, currentUser.id) <= Math.min(...counts);
   };
   const cleaningLastFor = (taskKey) => cleaningLog.find((r) => r.task === taskKey) || null; // cleaningLog 由新到舊排，第一筆就係上次完成
   const toggleCleaningTaskParticipant = (taskKey, coachId, checked) => {
@@ -3905,28 +3907,52 @@ export default function App() {
             );
           })()}
 
-          {isCoach && cleaningTasks.length > 0 && (
-            <div style={S.formCard}>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
-              <button style={{ ...S.linkBtn, fontSize: 15, fontWeight: 600, marginBottom: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
-              {cleaningTasks.map((t) => {
-                const next = cleaningNextFor(t.key);
-                const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
-                const daysAgo = myLogs.length > 0 ? Math.round((new Date(formatDate(new Date())) - new Date(myLogs[0].date)) / 86400000) : null;
-                const mineHint = daysAgo === null ? "你未做過" : daysAgo <= 0 ? "你今日做咗" : `你上次做已經係 ${daysAgo} 日前`;
-                return (
-                  <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222" }}>
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{t.label}</div>
-                      <div style={S.assistHint}>下一個：{next ? next.name : "—"}</div>
-                      {taskParticipants(t).includes(currentUser.id) && <div style={{ ...S.assistHint, color: "#666" }}>{mineHint}</div>}
+          {isCoach && cleaningTasks.length > 0 && (() => {
+            const today = formatDate(new Date());
+            const rows = cleaningTasks.map((t) => {
+              const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
+              const daysAgo = myLogs.length > 0 ? Math.round((new Date(today) - new Date(myLogs[0].date)) / 86400000) : null;
+              const mineHint = daysAgo === null ? "未有記錄" : daysAgo <= 0 ? "今日做咗" : `上次：${myLogs[0].date}`;
+              return { t, mineHint, daysAgo, due: isMyCleaningTaskDue(t) };
+            });
+            // 值得留意（due）嘅排最前，其餘跟返原本次序；due入面按耐冇做（daysAgo大）先排（未做過當最耐冇做）
+            const sorted = [...rows].sort((a, b) => {
+              if (a.due !== b.due) return a.due ? -1 : 1;
+              if (!a.due) return 0;
+              const da = a.daysAgo === null ? Infinity : a.daysAgo;
+              const db = b.daysAgo === null ? Infinity : b.daysAgo;
+              return db - da;
+            });
+            return (
+              <div style={S.formCard}>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
+                <button style={{ ...S.linkBtn, fontSize: 15, fontWeight: 600, marginBottom: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
+                {sorted.map(({ t, mineHint, due }) => {
+                  const open = due || expandedCleaningKeys.includes(t.key);
+                  return open ? (
+                    <div key={t.key} style={{ background: "#151515", borderRadius: 10, padding: "10px 12px", marginBottom: 8, borderLeft: due ? "3px solid #FFB347" : "3px solid transparent" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div style={{ fontWeight: 600 }}>{t.label}</div>
+                        {!due && <span style={{ ...S.linkBtn, marginTop: 0 }} onClick={() => setExpandedCleaningKeys((prev) => prev.filter((k) => k !== t.key))}>收埋 ︽</span>}
+                      </div>
+                      <div style={S.assistHint}>{mineHint}</div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                        <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>完成 ✓</button>
+                      </div>
                     </div>
-                    <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>✓ 我啱啱做咗</button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  ) : (
+                    <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#151515", borderRadius: 10, padding: "9px 12px", marginBottom: 8, cursor: "pointer" }} onClick={() => setExpandedCleaningKeys((prev) => [...prev, t.key])}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: "#aaa" }}>{t.label}</div>
+                        <div style={{ ...S.assistHint, marginTop: 2 }}>{mineHint}</div>
+                      </div>
+                      <span style={{ color: "#666", fontSize: 12 }}>︾</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       )}
 
