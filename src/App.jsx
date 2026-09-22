@@ -1480,9 +1480,12 @@ export default function App() {
   const sheetName = (s) => (s || "").replace(/[:\\/?*[\]]/g, " ").slice(0, 28).trim() || "Sheet";
   const fmtMoney = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // 生成購買堂數 Invoice（PDF），跟住公司提供嗰張範本排版；個性化資料（Bill to / Contact Person）留空，
-  // 其他全部跟住教練同呢筆購買記錄自動帶入；公司印章自動貼上。
-  const generateInvoicePDF = async (record) => {
+  // 生成Invoice（PDF），跟住公司提供嗰張範本排版；個性化資料（Bill to / Contact Person）留空，
+  // 其他全部自動帶入；公司印章自動貼上。通用化：購買堂數／飲品銷售都經呢個function，淨係lineItems/paymentTerms/sameDayList唔同，
+  // Invoice編號用返同一條全域invoiceCounter，兩種嚟源共用一條連續編號。
+  // opts: { coachName, date, id, paymentTerms, lineItems:[{description,qty,unitPrice,amount}], totalAmount, sameDayList }
+  const generateInvoicePDF = async (opts) => {
+    const { coachName, date, id, paymentTerms, lineItems, totalAmount, sameDayList } = opts;
     try {
       const { PDFDocument, rgb, StandardFonts } = await import("pdf-lib");
       const teal = rgb(...INVOICE_THEME_RGB);
@@ -1518,10 +1521,10 @@ export default function App() {
       // ---- 右側：根據教練／購買記錄自動帶入 ----
       const invoiceNo = `${INVOICE_PREFIX}${String(new Date().getFullYear()).slice(2)}${String(invoiceCounter).padStart(4, "0")}`;
       const infoRows = [
-        ["Client number :", `Coach-${record.coachName}`],
+        ["Client number :", `Coach-${coachName}`],
         ["Invoice number :", invoiceNo],
-        ["Invoice date :", record.date],
-        ["Payment terms :", "Lesson"],
+        ["Invoice date :", date],
+        ["Payment terms :", paymentTerms],
       ];
       infoRows.forEach(([label, val], i) => {
         const ly = y - i * 16;
@@ -1541,25 +1544,30 @@ export default function App() {
       page.drawText("(HKD)", { x: colUnit, y: y - 12, size: 8, font: bold, color: black });
       page.drawText("(HKD)", { x: colAmt, y: y - 12, size: 8, font: bold, color: black });
 
-      // ---- 資料行 ----
+      // ---- 資料行（可以多過一行，例如飲品一單買幾種）----
       y -= 55;
-      page.drawText("Purchase Lesson from coach", { x: colDesc, y, size: 9.5, font, color: black });
-      page.drawText(String(record.qty), { x: colQty, y, size: 9.5, font, color: black });
-      page.drawText(`$${fmtMoney(record.rate)}`, { x: colUnit, y, size: 9.5, font, color: black });
-      page.drawText(`$${fmtMoney(record.amount)}`, { x: colAmt, y, size: 9.5, font, color: black });
+      const rowLineHeight = 20;
+      lineItems.forEach((item, i) => {
+        const ry = y - i * rowLineHeight;
+        page.drawText(item.description, { x: colDesc, y: ry, size: 9.5, font, color: black });
+        page.drawText(String(item.qty), { x: colQty, y: ry, size: 9.5, font, color: black });
+        page.drawText(`$${fmtMoney(item.unitPrice)}`, { x: colUnit, y: ry, size: 9.5, font, color: black });
+        page.drawText(`$${fmtMoney(item.amount)}`, { x: colAmt, y: ry, size: 9.5, font, color: black });
+      });
+      y -= (lineItems.length - 1) * rowLineHeight; // 落返去最後一行嗰個y，之後跟返原本（單行）嘅排位邏輯繼續
 
       // ---- 總額 ----
       y -= 70;
       page.drawLine({ start: { x: marginX, y: y + 25 }, end: { x: rightX, y: y + 25 }, thickness: 1, color: grey });
       const totalLabel = "Total Amount =";
       page.drawText(totalLabel, { x: colUnit - 10, y, size: 11, font: bold, color: black });
-      page.drawText(`$${fmtMoney(record.amount)}`, { x: colAmt, y, size: 11, font: bold, color: black });
+      page.drawText(`$${fmtMoney(totalAmount)}`, { x: colAmt, y, size: 11, font: bold, color: black });
 
       // ---- Amount Paid（已收現金，全數）----
       y -= 35;
       page.drawLine({ start: { x: marginX, y: y + 25 }, end: { x: rightX, y: y + 25 }, thickness: 1, color: grey });
       page.drawText("Amount Paid", { x: colUnit - 10, y, size: 9.5, font: bold, color: black });
-      page.drawText(`$${fmtMoney(record.amount)}`, { x: colAmt, y, size: 9.5, font, color: black });
+      page.drawText(`$${fmtMoney(totalAmount)}`, { x: colAmt, y, size: 9.5, font, color: black });
 
       // ---- Balance Due（已全數收齊，$0）----
       y -= 35;
@@ -1586,10 +1594,10 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       // 檔名跟返日期：Invoice_YYYY-MM-DD.pdf；同一日如果多過一張，第二張起加_01、_02...（按實際落單先後排）
-      const sameDayRecords = purchaseLog.filter((r) => r.date === record.date).slice().reverse(); // purchaseLog係新到舊prepend，reverse返做由舊到新
-      const dayIdx = sameDayRecords.findIndex((r) => r.id === record.id);
+      const sameDayRecords = sameDayList.filter((r) => r.date === date).slice().reverse(); // log都係新到舊prepend，reverse返做由舊到新
+      const dayIdx = sameDayRecords.findIndex((r) => r.id === id);
       const suffix = dayIdx > 0 ? `_${String(dayIdx).padStart(2, "0")}` : "";
-      a.href = url; a.download = `Invoice_${record.date}${suffix}.pdf`;
+      a.href = url; a.download = `Invoice_${date}${suffix}.pdf`;
       document.body.appendChild(a); a.click();
       setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
       setInvoiceCounter((n) => n + 1);
@@ -2510,7 +2518,7 @@ export default function App() {
                     <div style={{ textAlign: "right" }}>
                       <div style={S.revenueNum}>+${r.amount.toLocaleString()}</div>
                       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                        <button style={S.linkBtn} onClick={() => generateInvoicePDF(r)}>🧾 開發票</button>
+                        <button style={S.linkBtn} onClick={() => generateInvoicePDF({ coachName: r.coachName, date: r.date, id: r.id, paymentTerms: "Lesson", lineItems: [{ description: "Purchase Lesson from coach", qty: r.qty, unitPrice: r.rate, amount: r.amount }], totalAmount: r.amount, sameDayList: purchaseLog })}>🧾 開發票</button>
                         <button style={S.linkBtn} onClick={() => setEditDateRec({ id: r.id, date: r.date })}>改日期</button>
                         <button style={{ ...S.linkBtn, color: "#FF6B6B" }} onClick={() => setDelLedgerModal(r)}>剷除</button>
                       </div>
@@ -2646,6 +2654,7 @@ export default function App() {
                         <div style={S.bookingTime}>{s.date} {s.time}{s.read === false ? "　🔴 未讀" : ""}</div>
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <button style={S.smallBtn} onClick={() => generateInvoicePDF({ coachName: s.coachName, date: s.date, id: s.id, paymentTerms: "Drink", lineItems: s.items.map((it) => ({ description: it.name, qty: it.qty, unitPrice: it.price, amount: it.price * it.qty })), totalAmount: s.amount, sameDayList: drinkSalesLog })}>🧾 開發票</button>
                         <button style={S.smallBtn} onClick={() => setEditDrinkSaleModal({ id: s.id, items: s.items.map((it) => ({ ...it })) })}>編輯</button>
                         <button style={S.delBtn} onClick={() => setDelDrinkSaleModal(s)}>剷除</button>
                       </div>
