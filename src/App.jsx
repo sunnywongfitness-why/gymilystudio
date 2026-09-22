@@ -753,9 +753,6 @@ export default function App() {
     setCleaningLog((prev) => [entry, ...prev]);
     showToast(`已記錄：${label}`);
   };
-  const updateCleaningEntryTask = (id, newTask) => {
-    setCleaningLog((prev) => prev.map((r) => r.id === id ? { ...r, task: newTask } : r));
-  };
   const addCleaningTask = (label) => {
     const name = (label || "").trim();
     if (!name) { showToast("請輸入工作名稱", "error"); return; }
@@ -3523,9 +3520,7 @@ export default function App() {
               <div style={{ maxHeight: 220, overflowY: "auto" }}>
                 {cleaningLog.slice(0, 40).map((r) => (
                   <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
-                    <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
-                      {cleaningTasks.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                    </select>
+                    <span style={{ flexShrink: 0, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cleaningTasks.find((t) => t.key === r.task)?.label || r.task}</span>
                     <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
                     <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>
                   </div>
@@ -4437,16 +4432,10 @@ export default function App() {
           {cleaningLog.length === 0 ? <p style={S.emptyText}>暫無記錄</p> : (
             <div style={{ maxHeight: 220, overflowY: "auto" }}>
               {cleaningLog.slice(0, 40).map((r) => {
-                const isMine = r.coachId === currentUser.id; // 教練淨係改得自己嘅記錄，其他人嘅得返睇（Admin個view唔受呢個限制）
+                const isMine = r.coachId === currentUser.id; // 教練淨係刪得自己嘅記錄，其他人嘅得返睇（Admin個view唔受呢個限制）；2026-09：記錄嘅工作類型改做唔畀改，淨係可以刪除
                 return (
                   <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 6 }}>
-                    {isMine ? (
-                      <select style={{ ...S.select, fontSize: 11, padding: "3px 6px", flexShrink: 0, maxWidth: 110 }} value={r.task} onChange={(e) => updateCleaningEntryTask(r.id, e.target.value)}>
-                        {cleaningTasks.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                      </select>
-                    ) : (
-                      <span style={{ flexShrink: 0, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cleaningTasks.find((t) => t.key === r.task)?.label || r.task}</span>
-                    )}
+                    <span style={{ flexShrink: 0, maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cleaningTasks.find((t) => t.key === r.task)?.label || r.task}</span>
                     <span style={{ flex: 1 }}>{r.coachName} · {r.date}</span>
                     {isMine && <button style={{ background: "none", border: "none", color: "#FF6B6B", fontSize: 11, cursor: "pointer", flexShrink: 0 }} onClick={() => deleteCleaningEntry(r.id)}>刪除</button>}
                   </div>
