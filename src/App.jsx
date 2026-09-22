@@ -102,6 +102,8 @@ export default function App() {
   const [syncConflictLog, setSyncConflictLog] = useState(() => persisted("syncConflictLog", [])); // {at, keysLocal, keysRemote, bookingSlotsLocal, bookingSlotsRemote} 每次偵測到雲端同步衝突就記一筆，唔使人手逼再現先知道有冇撞
   const [cleaningParticipants, setCleaningParticipants] = useState(() => persisted("cleaningParticipants", [])); // 參與清潔輪流嘅教練id
   const [trialParticipants, setTrialParticipants] = useState(() => persisted("trialParticipants", [])); // 參與試堂輪流嘅教練id（2026-09新增）
+  const [trialCountAdjust, setTrialCountAdjust] = useState(() => persisted("trialCountAdjust", {})); // {[coachId]: number} 手動調整「已教試堂次數」嘅落差值，加落用booking計出嚟嘅基數上面，方便修正歷史誤差（2026-09新增）
+  const [trialCountEditRow, setTrialCountEditRow] = useState(null); // 「已教試堂次數」邊個教練行入緊編輯模式（純UI狀態，唔使同步/persist）
   const [cleaningTasks, setCleaningTasks] = useState(() => persisted("cleaningTasks", DEFAULT_CLEANING_TASKS)); // 清潔輪流嘅工作項目，admin可自行新增/刪除
   const [cleaningLog, setCleaningLog] = useState(() => persisted("cleaningLog", [])); // {id, task, coachId, coachName, date, at} 逐筆清潔完成記錄，4樣嘢獨立輪（2026-09定案）
   const [cleaningLogModal, setCleaningLogModal] = useState(false);
@@ -171,6 +173,7 @@ export default function App() {
     if (d.cleaningParticipants !== undefined) setCleaningParticipants(d.cleaningParticipants);
     if (d.cleaningTasks !== undefined) setCleaningTasks(d.cleaningTasks);
     if (d.trialParticipants !== undefined) setTrialParticipants(d.trialParticipants);
+    if (d.trialCountAdjust !== undefined) setTrialCountAdjust(d.trialCountAdjust);
     if (d.cleaningLog !== undefined) setCleaningLog(d.cleaningLog);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
@@ -188,7 +191,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -264,7 +267,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -331,7 +334,7 @@ export default function App() {
       }
     };
     saveTimer.current = setTimeout(() => attemptSync(0), 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
   // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
@@ -730,20 +733,28 @@ export default function App() {
     }));
   };
 
-  // ---- 試堂輪流：Book試堂嗰陣自動建議「教得最少」嘅參與教練，直接攞現有試堂booking記錄嚟計，唔開新log（2026-09新增；2026-09擴充：可分「經公司／個人」，個人試堂唔計落公平輪流）----
-  const trialNextFor = () => {
-    const participants = coaches.filter((c) => trialParticipants.includes(c.id));
-    if (participants.length === 0) return null;
-    const trialCounts = {}; // coachName -> 已教試堂次數
+  // ---- 試堂輪流：Book試堂嗰陣自動建議「教得最少」嘅參與教練，直接攞現有試堂booking記錄嚟計，唔開新log（2026-09新增；2026-09擴充：可分「經公司／個人」，個人試堂唔計落公平輪流；2026-09再擴充：Admin可以手動修正次數，落差值存喺trialCountAdjust，加落用booking計出嚟嘅基數上面）----
+  const trialBaseCountFor = (coachName) => { // 純粹由booking記錄計出嚟嘅基數（經公司，唔計個人），唔包手動調整
+    let count = 0;
     Object.entries(bookings).forEach(([k, arr]) => {
       const date = k.split("_")[0];
       arr.forEach((v) => {
-        if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName && v.trialSource !== "personal") {
-          trialCounts[v.coachName] = (trialCounts[v.coachName] || 0) + 1;
-        }
+        if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName === coachName && v.trialSource !== "personal") count++;
       });
     });
-    const counts = participants.map((c) => ({ coach: c, count: trialCounts[c.name] || 0 }));
+    return count;
+  };
+  const trialCountFor = (coach) => trialBaseCountFor(coach.name) + (trialCountAdjust[coach.id] || 0); // 基數＋手動調整落差
+  const setTrialCountManual = (coachId, newValue) => {
+    const coach = getCoach(coachId);
+    if (!coach) return;
+    const base = trialBaseCountFor(coach.name);
+    setTrialCountAdjust((prev) => ({ ...prev, [coachId]: Number(newValue) - base }));
+  };
+  const trialNextFor = () => {
+    const participants = coaches.filter((c) => trialParticipants.includes(c.id));
+    if (participants.length === 0) return null;
+    const counts = participants.map((c) => ({ coach: c, count: trialCountFor(c) }));
     counts.sort((a, b) => a.count - b.count);
     return counts[0].coach;
   };
@@ -2789,19 +2800,32 @@ export default function App() {
                         <div style={{ marginTop: 14 }}>
                           <label style={S.label}>已教試堂次數（經公司，用嚟計輪流）</label>
                           {coaches.filter((c) => trialParticipants.includes(c.id)).map((c) => {
-                            let count = 0, personalCount = 0;
+                            const count = trialCountFor(c); // 基數（booking計出嚟）＋手動調整落差
+                            let personalCount = 0;
                             Object.entries(bookings).forEach(([k, arr]) => {
                               const date = k.split("_")[0];
                               arr.forEach((v) => {
-                                if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName === c.name) {
-                                  if (v.trialSource === "personal") personalCount++; else count++;
-                                }
+                                if (k === `${date}_${v.start}` && v.type === "charter" && v.charterType === "trial" && v.coachName === c.name && v.trialSource === "personal") personalCount++;
                               });
                             });
+                            const editing = trialCountEditRow === c.id;
                             return (
-                              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e" }}>
+                              <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13, color: "#aaa", padding: "5px 0", borderBottom: "1px solid #1e1e1e", gap: 8 }}>
                                 <span>{c.name}</span>
-                                <span style={{ color: "#4ECDC4" }}>{count} 堂{personalCount > 0 && <span style={{ color: "#666", marginLeft: 6 }}>（另有個人 {personalCount} 堂，唔計落輪流）</span>}</span>
+                                {editing ? (
+                                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <input style={{ ...S.input, width: 60, padding: "4px 8px", fontSize: 13 }} type="number" step="1" defaultValue={count}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { setTrialCountManual(c.id, e.target.value); setTrialCountEditRow(null); } if (e.key === "Escape") setTrialCountEditRow(null); }}
+                                      id={`trialCountInput_${c.id}`} autoFocus />
+                                    <button style={{ ...S.linkBtn, marginTop: 0, color: "#4ECDC4" }} onClick={() => { const v = document.getElementById(`trialCountInput_${c.id}`)?.value; setTrialCountManual(c.id, v); setTrialCountEditRow(null); }}>✓</button>
+                                    <button style={{ ...S.linkBtn, marginTop: 0 }} onClick={() => setTrialCountEditRow(null)}>✕</button>
+                                  </span>
+                                ) : (
+                                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <span style={{ color: "#4ECDC4" }}>{count} 堂{personalCount > 0 && <span style={{ color: "#666", marginLeft: 6 }}>（另有個人 {personalCount} 堂，唔計落輪流）</span>}</span>
+                                    <button style={{ ...S.linkBtn, marginTop: 0 }} onClick={() => setTrialCountEditRow(c.id)}>✎ 修改</button>
+                                  </span>
+                                )}
                               </div>
                             );
                           })}
