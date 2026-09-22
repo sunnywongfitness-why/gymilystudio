@@ -124,7 +124,8 @@ export default function App() {
   const [drinkSalesLog, setDrinkSalesLog] = useState(() => persisted("drinkSalesLog", [])); // {id, coachId, coachName, items:[{productId,name,price,qty}], amount, date, time} 飲品銷售記錄，掛落教練account，唔追蹤買家（學生）身份
   const [adjustLog, setAdjustLog] = useState(() => persisted("adjustLog", [])); // {id, coachId, coachName, before, after, note, actorTag, at} 手動調整已用時數嘅記錄
   const [expenseLog, setExpenseLog] = useState(() => persisted("expenseLog", [])); // {id, date, category, payer, items:[{name,amount}], amount, status(unpaid/paid), voucherNo, addedBy, at} 公司支出記錄（財務功能，2026-09新增）
-  const [expenseModal, setExpenseModal] = useState(null); // 新增/編輯支出表格暫存：{ id, date, category, payer, items, status, receiptDataUrl }
+  const [expenseModal, setExpenseModal] = useState(null); // 新增/編輯支出表格暫存：{ id, date, category, payer, items, status, receiptPhoto }。receiptPhoto淨係填表用完即棄，expenseModal本身唔屬於persisted/sync狀態，saveExpense入面亦冇攞呢個field，所以呢張相保證唔會落local storage/雲端（2026-09新增，用嚟喺填表嗰陣對住相抄資料）
+  const [receiptLightbox, setReceiptLightbox] = useState(false); // 憑證大圖lightbox開關（純UI狀態）
   const [quickLinks, setQuickLinks] = useState(() => persisted("quickLinks", [])); // {id, name, url} Admin設定嘅常用外部連結（買水/入貨網店、其他日常要開嘅外部網站，2026-09新增）
   const [newQuickLinkForm, setNewQuickLinkForm] = useState({ name: "", url: "" });
   const [delExpenseModal, setDelExpenseModal] = useState(null); // 待刪除嘅支出記錄
@@ -145,6 +146,8 @@ export default function App() {
   const lastSyncedRef = useRef(null);
   const readyRef = useRef(!cloudEnabled); // 雲端模式要等首次載入完成先準許寫入
   const saveTimer = useRef(null);
+  const receiptImgRef = useRef(null); // 憑證相已load嘅Image object快取，避免redraw要重新load（唔係React state，唔會觸發re-render）
+  const receiptCanvasRef = useRef(null); // 憑證大圖lightbox入面個canvas
 
   const applyBundle = (d) => {
     if (!d) return;
@@ -951,6 +954,63 @@ export default function App() {
     setExpenseLog((prev) => prev.filter((r) => r.id !== id));
     showToast("已刪除支出記錄");
   };
+
+  // ---- 支出「憑證」：填表嗰陣揀一張相，方便對住相抄資料；純粹UI暫存，儲存/取消個modal就冧，app本身唔會存呢張相（2026-09新增）----
+  const handleReceiptFile = (file) => {
+    if (!file || !file.type.startsWith("image/")) { showToast("請揀圖片檔案", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      const img = new Image();
+      img.onload = () => {
+        receiptImgRef.current = img;
+        setExpenseModal((prev) => prev ? { ...prev, receiptPhoto: dataUrl } : prev);
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  };
+  const removeReceiptPhoto = () => {
+    receiptImgRef.current = null;
+    setReceiptLightbox(false);
+    setExpenseModal((prev) => prev ? { ...prev, receiptPhoto: null } : prev);
+  };
+  const drawReceiptOverlay = () => {
+    const canvas = receiptCanvasRef.current;
+    const img = receiptImgRef.current;
+    if (!canvas || !img || !expenseModal) return;
+    const ctx = canvas.getContext("2d");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+    const itemsText = (expenseModal.items || []).filter((it) => it.name || it.amount).map((it) => `${it.name || "—"} $${it.amount || 0}`).join("、") || "—";
+    const lines = [
+      `日期：${expenseModal.date || "—"}`,
+      `物品：${itemsText}`,
+      `代付人：${expenseModal.payer || "—"}`,
+    ];
+    const pad = Math.round(canvas.width * 0.03);
+    const fontSize = Math.max(16, Math.round(canvas.width * 0.032));
+    const lineHeight = fontSize * 1.5;
+    const bannerHeight = lineHeight * lines.length + pad * 2;
+    ctx.fillStyle = "rgba(0,0,0,0.62)";
+    ctx.fillRect(0, canvas.height - bannerHeight, canvas.width, bannerHeight);
+    ctx.font = `600 ${fontSize}px -apple-system, sans-serif`;
+    ctx.fillStyle = "#fff";
+    ctx.textBaseline = "top";
+    lines.forEach((line, i) => ctx.fillText(line, pad, canvas.height - bannerHeight + pad + i * lineHeight));
+  };
+  const downloadReceiptPhoto = () => {
+    const canvas = receiptCanvasRef.current;
+    if (!canvas) return;
+    const link = document.createElement("a");
+    link.download = `憑證_${expenseModal?.date || "receipt"}.jpg`;
+    link.href = canvas.toDataURL("image/jpeg", 0.92); // JPEG而唔用PNG：張相本身係相機相，JPEG檔案細好多，畫質肉眼睇落冇分別
+    link.click();
+  };
+  useEffect(() => { // 憑證大圖開住嗰陣，日期/物品/代付人一改就即時redraw個overlay
+    if (receiptLightbox) drawReceiptOverlay();
+  }, [receiptLightbox, expenseModal?.date, expenseModal?.items, expenseModal?.payer, expenseModal?.receiptPhoto]);
   const toggleExpenseStatus = (id) => {
     setExpenseLog((prev) => prev.map((r) => r.id === id ? { ...r, status: r.status === "paid" ? "unpaid" : "paid" } : r));
   };
@@ -2600,7 +2660,7 @@ export default function App() {
               return (
               <>
                 <div style={{ ...S.flexBetween, marginTop: 14, flexWrap: "wrap", gap: 8 }}>
-                  <button style={S.addBtn} onClick={() => setExpenseModal({ id: null, date: formatDate(new Date()), category: EXPENSE_CATEGORIES[0], payer: "", items: [{ name: "", amount: "" }], status: "unpaid" })}>＋ 新增支出</button>
+                  <button style={S.addBtn} onClick={() => { receiptImgRef.current = null; setReceiptLightbox(false); setExpenseModal({ id: null, date: formatDate(new Date()), category: EXPENSE_CATEGORIES[0], payer: "", items: [{ name: "", amount: "" }], status: "unpaid" }); }}>＋ 新增支出</button>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button style={S.smallBtn} onClick={() => setFinanceReportModal("monthly")}>📊 每月收支報表</button>
                     <button style={S.smallBtn} onClick={() => setFinanceReportModal("annual")}>📑 年度報稅Excel</button>
@@ -2626,7 +2686,7 @@ export default function App() {
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         <button style={S.smallBtn} onClick={() => setVoucherModal(r)}>🧾 憑證</button>
                         <button style={S.smallBtn} onClick={() => toggleExpenseStatus(r.id)}>{r.status === "paid" ? "標為未歸還" : "標為已歸還"}</button>
-                        <button style={S.smallBtn} onClick={() => setExpenseModal({ id: r.id, date: r.date, category: r.category, payer: r.payer, items: r.items.map((it) => ({ ...it })), status: r.status })}>編輯</button>
+                        <button style={S.smallBtn} onClick={() => { receiptImgRef.current = null; setReceiptLightbox(false); setExpenseModal({ id: r.id, date: r.date, category: r.category, payer: r.payer, items: r.items.map((it) => ({ ...it })), status: r.status }); }}>編輯</button>
                         <button style={S.delBtn} onClick={() => setDelExpenseModal(r)}>刪除</button>
                       </div>
                     </div>
@@ -3659,11 +3719,33 @@ export default function App() {
           <div style={S.modalOverlay}><div style={{ ...S.modal, width: 340, textAlign: "left" }}>
             <h3 style={S.modalTitle}>{expenseModal.id ? "編輯支出" : "新增支出"}</h3>
             <Field label="購買日期"><input style={S.input} type="date" value={expenseModal.date} onChange={(e) => setExpenseModal({ ...expenseModal, date: e.target.value })} /></Field>
-            <Field label="類別">
-              <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={expenseModal.category} onChange={(e) => setExpenseModal({ ...expenseModal, category: e.target.value })}>
-                {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </Field>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginBottom: 14 }}>
+              <div style={{ flex: 1 }}>
+                <Field label="類別">
+                  <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={expenseModal.category} onChange={(e) => setExpenseModal({ ...expenseModal, category: e.target.value })}>
+                    {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+              </div>
+              <div>
+                <label style={{ ...S.label, display: "block", marginBottom: 8 }}>憑證</label>
+                {expenseModal.receiptPhoto ? (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(78,205,196,.14)", border: "1px solid rgba(78,205,196,.4)", borderRadius: 22, padding: "6px 14px 6px 6px", cursor: "pointer", position: "relative" }}
+                    onClick={() => setReceiptLightbox(true)}>
+                    <img src={expenseModal.receiptPhoto} alt="憑證縮圖" style={{ width: 26, height: 26, borderRadius: 7, objectFit: "cover", background: "#fff", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#4ECDC4" }}>憑證</span>
+                    <span style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#e2685a", color: "#fff", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #1a1a1a" }}
+                      onClick={(e) => { e.stopPropagation(); removeReceiptPhoto(); }}>✕</span>
+                  </div>
+                ) : (
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px dashed #444", borderRadius: 22, padding: "8px 16px", color: "#888", fontSize: 13, cursor: "pointer" }}
+                    onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); handleReceiptFile(e.dataTransfer.files?.[0]); }}>
+                    <span>🧾</span><span>＋ 加憑證</span>
+                    <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleReceiptFile(e.target.files?.[0])} />
+                  </label>
+                )}
+              </div>
+            </div>
             <Field label="代付人">
               <select style={{ ...S.select, width: "100%", boxSizing: "border-box" }} value={expenseModal.payer} onChange={(e) => setExpenseModal({ ...expenseModal, payer: e.target.value })}>
                 <option value="">請選擇</option>
@@ -3692,10 +3774,20 @@ export default function App() {
               <button style={expenseModal.status === "paid" ? S.segActive : S.seg} onClick={() => setExpenseModal({ ...expenseModal, status: "paid" })}>已歸還</button>
             </div>
             <div style={S.modalBtns}>
-              <button style={S.modalCancel} onClick={() => setExpenseModal(null)}>取消</button>
-              <button style={S.modalConfirm} onClick={() => { if (saveExpense(expenseModal)) setExpenseModal(null); }}>儲存</button>
+              <button style={S.modalCancel} onClick={() => { receiptImgRef.current = null; setReceiptLightbox(false); setExpenseModal(null); }}>取消</button>
+              <button style={S.modalConfirm} onClick={() => { if (saveExpense(expenseModal)) { receiptImgRef.current = null; setReceiptLightbox(false); setExpenseModal(null); } }}>儲存</button>
             </div>
           </div></div>
+        )}
+        {receiptLightbox && expenseModal?.receiptPhoto && (
+          <div style={{ ...S.modalOverlay, zIndex: 300, flexDirection: "column" }} onClick={(e) => { if (e.target === e.currentTarget) setReceiptLightbox(false); }}>
+            <canvas ref={receiptCanvasRef} style={{ maxWidth: "94vw", maxHeight: "66vh", borderRadius: 12, boxShadow: "0 10px 40px rgba(0,0,0,.6)" }} />
+            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+              <button style={{ ...S.modalConfirm, padding: "12px 22px" }} onClick={downloadReceiptPhoto}>⬇ 下載呢張相（連資料）</button>
+              <button style={{ ...S.modalCancel, padding: "12px 22px" }} onClick={() => setReceiptLightbox(false)}>關閉</button>
+            </div>
+            <p style={{ color: "#777", fontSize: 11, marginTop: 10, textAlign: "center", maxWidth: 320 }}>呢個「下載」淨係將相＋資料匯出做一張圖檔存落你部機，唔會入返記錄；下面平時嗰個「儲存」淨係存支出嘅文字記錄，唔包相。</p>
+          </div>
         )}
         {delExpenseModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
