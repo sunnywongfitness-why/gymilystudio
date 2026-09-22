@@ -3844,6 +3844,53 @@ export default function App() {
             );
           })()}
 
+          {isCoach && cleaningTasks.length > 0 && (() => {
+            const today = formatDate(new Date());
+            const rows = cleaningTasks.map((t) => {
+              const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
+              const daysAgo = myLogs.length > 0 ? Math.round((new Date(today) - new Date(myLogs[0].date)) / 86400000) : null;
+              const mineHint = daysAgo === null ? "未有記錄" : daysAgo <= 0 ? "今日做咗" : `上次：${myLogs[0].date}`;
+              return { t, mineHint, daysAgo, due: isMyCleaningTaskDue(t) };
+            });
+            // 值得留意（due）嘅排最前，其餘跟返原本次序；due入面按耐冇做（daysAgo大）先排（未做過當最耐冇做）
+            const sorted = [...rows].sort((a, b) => {
+              if (a.due !== b.due) return a.due ? -1 : 1;
+              if (!a.due) return 0;
+              const da = a.daysAgo === null ? Infinity : a.daysAgo;
+              const db = b.daysAgo === null ? Infinity : b.daysAgo;
+              return db - da;
+            });
+            return (
+              <div style={S.formCard}>
+                <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
+                <button style={{ ...S.linkBtn, fontSize: 15, fontWeight: 600, marginBottom: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
+                {sorted.map(({ t, mineHint, due }) => {
+                  const open = due || expandedCleaningKeys.includes(t.key);
+                  return open ? (
+                    <div key={t.key} style={{ background: "#151515", borderRadius: 10, padding: "10px 12px", marginBottom: 8, borderLeft: due ? "3px solid #FFB347" : "3px solid transparent" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div style={{ fontWeight: 600 }}>{t.label}</div>
+                        {!due && <span style={{ ...S.linkBtn, marginTop: 0 }} onClick={() => setExpandedCleaningKeys((prev) => prev.filter((k) => k !== t.key))}>收埋 ︽</span>}
+                      </div>
+                      <div style={S.assistHint}>{mineHint}</div>
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+                        <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>完成 ✓</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#151515", borderRadius: 10, padding: "9px 12px", marginBottom: 8, cursor: "pointer" }} onClick={() => setExpandedCleaningKeys((prev) => [...prev, t.key])}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: "#aaa" }}>{t.label}</div>
+                        <div style={{ ...S.assistHint, marginTop: 2 }}>{mineHint}</div>
+                      </div>
+                      <span style={{ color: "#666", fontSize: 12 }}>︾</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
           {isCoach && (() => {
             // 第0.2項：快速Book表格——教練自己book用嘅表格式輸入，取代/補充grid點格仔。用返confirmBook同一套驗證同Pass邏輯，唔開新規則
             const qbDate = quickBook.date || formatDate(new Date());
@@ -3903,53 +3950,6 @@ export default function App() {
                 </div>
                 <button style={S.modalConfirm} onClick={() => confirmBook({ date: qbDate, time: quickBook.start, sessionType: quickBook.sessionType, hours: Number(quickBook.hours), students: quickBook.students, studentOther: quickBook.studentOther, repeatWeeks: 1 })}>確認 Book 堂</button>
                 <p style={S.assistHint}>同點格仔 book 堂用同一套時段衝突同Pass扣鐘規則，最終以送出時系統驗證為準。</p>
-              </div>
-            );
-          })()}
-
-          {isCoach && cleaningTasks.length > 0 && (() => {
-            const today = formatDate(new Date());
-            const rows = cleaningTasks.map((t) => {
-              const myLogs = cleaningLog.filter((r) => r.task === t.key && r.coachId === currentUser.id);
-              const daysAgo = myLogs.length > 0 ? Math.round((new Date(today) - new Date(myLogs[0].date)) / 86400000) : null;
-              const mineHint = daysAgo === null ? "未有記錄" : daysAgo <= 0 ? "今日做咗" : `上次：${myLogs[0].date}`;
-              return { t, mineHint, daysAgo, due: isMyCleaningTaskDue(t) };
-            });
-            // 值得留意（due）嘅排最前，其餘跟返原本次序；due入面按耐冇做（daysAgo大）先排（未做過當最耐冇做）
-            const sorted = [...rows].sort((a, b) => {
-              if (a.due !== b.due) return a.due ? -1 : 1;
-              if (!a.due) return 0;
-              const da = a.daysAgo === null ? Infinity : a.daysAgo;
-              const db = b.daysAgo === null ? Infinity : b.daysAgo;
-              return db - da;
-            });
-            return (
-              <div style={S.formCard}>
-                <div style={{ fontSize: 11, color: "#888", marginBottom: 10, letterSpacing: 0.5 }}>🧹 清潔輪流</div>
-                <button style={{ ...S.linkBtn, fontSize: 15, fontWeight: 600, marginBottom: 10 }} onClick={() => setCleaningLogModal(true)}>睇記錄</button>
-                {sorted.map(({ t, mineHint, due }) => {
-                  const open = due || expandedCleaningKeys.includes(t.key);
-                  return open ? (
-                    <div key={t.key} style={{ background: "#151515", borderRadius: 10, padding: "10px 12px", marginBottom: 8, borderLeft: due ? "3px solid #FFB347" : "3px solid transparent" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <div style={{ fontWeight: 600 }}>{t.label}</div>
-                        {!due && <span style={{ ...S.linkBtn, marginTop: 0 }} onClick={() => setExpandedCleaningKeys((prev) => prev.filter((k) => k !== t.key))}>收埋 ︽</span>}
-                      </div>
-                      <div style={S.assistHint}>{mineHint}</div>
-                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-                        <button style={S.smallBtn} onClick={() => markCleaningDone(t.key)}>完成 ✓</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={t.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#151515", borderRadius: 10, padding: "9px 12px", marginBottom: 8, cursor: "pointer" }} onClick={() => setExpandedCleaningKeys((prev) => [...prev, t.key])}>
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: "#aaa" }}>{t.label}</div>
-                        <div style={{ ...S.assistHint, marginTop: 2 }}>{mineHint}</div>
-                      </div>
-                      <span style={{ color: "#666", fontSize: 12 }}>︾</span>
-                    </div>
-                  );
-                })}
               </div>
             );
           })()}
