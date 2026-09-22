@@ -40,6 +40,7 @@ const ICON_PATHS = {
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/>',
   moreHorizontal: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
 };
 function Icon({ name, size = 21 }) {
   return (
@@ -124,6 +125,8 @@ export default function App() {
   const [adjustLog, setAdjustLog] = useState(() => persisted("adjustLog", [])); // {id, coachId, coachName, before, after, note, actorTag, at} 手動調整已用時數嘅記錄
   const [expenseLog, setExpenseLog] = useState(() => persisted("expenseLog", [])); // {id, date, category, payer, items:[{name,amount}], amount, status(unpaid/paid), voucherNo, addedBy, at} 公司支出記錄（財務功能，2026-09新增）
   const [expenseModal, setExpenseModal] = useState(null); // 新增/編輯支出表格暫存：{ id, date, category, payer, items, status, receiptDataUrl }
+  const [quickLinks, setQuickLinks] = useState(() => persisted("quickLinks", [])); // {id, name, url} Admin設定嘅常用外部連結（買水/入貨網店、其他日常要開嘅外部網站，2026-09新增）
+  const [newQuickLinkForm, setNewQuickLinkForm] = useState({ name: "", url: "" });
   const [delExpenseModal, setDelExpenseModal] = useState(null); // 待刪除嘅支出記錄
   const [voucherModal, setVoucherModal] = useState(null); // 準備生成憑證嘅支出記錄
   const [financeReportModal, setFinanceReportModal] = useState(null); // "monthly" | "annual" | null，匯出報表揀月份/財政年度嘅彈窗
@@ -174,6 +177,7 @@ export default function App() {
     if (d.cleaningTasks !== undefined) setCleaningTasks(d.cleaningTasks);
     if (d.trialParticipants !== undefined) setTrialParticipants(d.trialParticipants);
     if (d.trialCountAdjust !== undefined) setTrialCountAdjust(d.trialCountAdjust);
+    if (d.quickLinks !== undefined) setQuickLinks(d.quickLinks);
     if (d.cleaningLog !== undefined) setCleaningLog(d.cleaningLog);
     if (d.drinkSalesLog !== undefined) setDrinkSalesLog(d.drinkSalesLog);
     if (d.adjustLog !== undefined) setAdjustLog(d.adjustLog);
@@ -191,7 +195,7 @@ export default function App() {
         applyBundle(remote);
       } else {
         // 雲端未有資料：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust };
+        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust, quickLinks };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
       }
@@ -267,7 +271,7 @@ export default function App() {
 
   // 任何資料變更時儲存（雲端 or 本機）
   useEffect(() => {
-    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust };
+    const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust, quickLinks };
     // 本機永遠都存一份（離線後備）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
@@ -334,7 +338,7 @@ export default function App() {
       }
     };
     saveTimer.current = setTimeout(() => attemptSync(0), 500);
-  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust]);
+  }, [coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust, quickLinks]);
 
   // 學生堂數扣減：唔再要求一定要簽名先扣——只要堂已經完成（結束時間已過）就自動扣，簽名淨係做返出席證明用途（2026-07定案）
   // 用 autoDeducted 欄位記低邊個學生已經自動扣咗，避免重複扣；如果之後補簽名，signIn() 會自己check唔會再扣多次
@@ -777,6 +781,20 @@ export default function App() {
   const deleteCleaningEntry = (id) => {
     setCleaningLog((prev) => prev.filter((r) => r.id !== id));
     showToast("已刪除記錄");
+  };
+
+  // ---- 常用連結：Admin自己維護一批日常要開嘅外部網站（例如買水/入貨網店），撳一下用新分頁開（2026-09新增）----
+  const addQuickLink = () => {
+    const name = newQuickLinkForm.name.trim();
+    let url = newQuickLinkForm.url.trim();
+    if (!name || !url) { showToast("請輸入名稱同網址", "error"); return; }
+    if (!/^https?:\/\//i.test(url)) url = "https://" + url; // 用戶冇打http(s)://都自動補返，方便打字
+    const id = "ql" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    setQuickLinks((prev) => [...prev, { id, name, url }]);
+    setNewQuickLinkForm({ name: "", url: "" });
+  };
+  const removeQuickLink = (id) => {
+    setQuickLinks((prev) => prev.filter((l) => l.id !== id));
   };
 
   // ---- 文本範本庫（第10項重構）：admin可自由編輯/新增/刪除範本，撳「發送文本」揀教練+範本，自動代入{{教練名}}，時數留喺預覽度手動填 ----
@@ -2629,6 +2647,7 @@ export default function App() {
                 {[
                   { key: "coach", icon: "wrench", title: "教練工具", desc: "飲品產品、文本範本庫、發送文本俾教練", adminOnly: true },
                   { key: "venue", icon: "mapPin", title: "場地資訊", desc: "場地公告、收款QR、WhatsApp號碼、管理員電話", adminOnly: true },
+                  { key: "links", icon: "link", title: "常用連結", desc: "買水/入貨網店、其他日常要開嘅外部網站", adminOnly: true },
                   { key: "account", icon: "shield", title: "帳戶與安全", desc: isSubAdmin ? "修改我的密碼" : "修改密碼、副管理員帳戶" },
                   { key: "data", icon: "database", title: "資料管理", desc: currentUser.role === "admin" ? "匯出備份、同步記錄、清理歷史資料、重設資料" : "匯出資料備份" },
                   { key: "other", icon: "moreHorizontal", title: "其他", desc: "匿名改善建議、日曆同步", adminOnly: true },
@@ -2653,7 +2672,7 @@ export default function App() {
                     <Icon name="chevronLeft" size={18} />
                   </div>
                   <h2 style={{ ...S.sectionTitle, marginTop: 0 }}>
-                    {{ coach: "教練工具", venue: "場地資訊", account: "帳戶與安全", data: "資料管理", other: "其他" }[settingsCategory]}
+                    {{ coach: "教練工具", venue: "場地資訊", links: "常用連結", account: "帳戶與安全", data: "資料管理", other: "其他" }[settingsCategory]}
                   </h2>
                 </div>
 
@@ -2868,6 +2887,30 @@ export default function App() {
                         <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleQRUpload(e.target.files?.[0])} />
                       </label>
                       {paymentQR && <button style={{ ...S.smallBtn, width: "100%", marginTop: 8 }} onClick={() => setPaymentQR("")}>移除</button>}
+                    </div>
+                  </>
+                )}
+
+                {settingsCategory === "links" && currentUser.role === "admin" && (
+                  <>
+                    <h2 style={S.sectionTitle}>常用連結</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>日常要開嘅外部網站（例如買水/入貨網店、電費、場地管理系統），加落呢度方便隨時撳出去，唔使自己搵書籤。</p>
+                      {quickLinks.length === 0 ? <p style={S.emptyText}>暫無連結，喺下面新增一個先</p> : (
+                        <div style={{ marginBottom: 14 }}>
+                          {quickLinks.map((l) => (
+                            <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222", gap: 8 }}>
+                              <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, color: "#4ECDC4", fontWeight: 600, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                🔗 {l.name}
+                              </a>
+                              <button style={{ ...S.linkBtn, marginTop: 0, flexShrink: 0 }} onClick={() => removeQuickLink(l.id)}>刪除</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <Field label="名稱"><input style={S.input} placeholder="例如「日常用品網店」" value={newQuickLinkForm.name} onChange={(e) => setNewQuickLinkForm({ ...newQuickLinkForm, name: e.target.value })} /></Field>
+                      <Field label="網址"><input style={S.input} placeholder="例如 www.example.com" value={newQuickLinkForm.url} onChange={(e) => setNewQuickLinkForm({ ...newQuickLinkForm, url: e.target.value })} /></Field>
+                      <button style={{ ...S.smallBtn, width: "100%", marginTop: 4 }} onClick={addQuickLink}>＋ 新增連結</button>
                     </div>
                   </>
                 )}
