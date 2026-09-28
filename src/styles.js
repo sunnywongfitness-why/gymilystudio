@@ -81,6 +81,7 @@ export const S = {
   slotClosed: { minHeight: 20, background: "#0c0c0c", borderRadius: 3 },
   closedTag: { fontSize: 9, color: "#7a4040", marginTop: 2 },
   todayTag: { fontSize: 9, color: "#4ECDC4", marginTop: 2, fontWeight: 700 },
+  dueChip: { display: "inline-block", marginTop: 4, background: "#3a2a0f", color: "#FFB347", border: "1px solid #5a4520", borderRadius: 6, padding: "2px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
   kpiRow: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 24 },
   kpiCard: { background: "#1a1a1a", borderRadius: 12, padding: "18px 12px", textAlign: "center" },
   kpiLabel: { color: "#888", fontSize: 12, marginBottom: 6 },

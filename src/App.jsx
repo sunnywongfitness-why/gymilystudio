@@ -126,8 +126,10 @@ export default function App() {
   const [expenseLog, setExpenseLog] = useState(() => persisted("expenseLog", [])); // {id, date, category, payer, items:[{name,amount}], amount, status(unpaid/paid), voucherNo, addedBy, at} 公司支出記錄（財務功能，2026-09新增）
   const [expenseModal, setExpenseModal] = useState(null); // 新增/編輯支出表格暫存：{ id, date, category, payer, items, status, receiptPhoto }。receiptPhoto淨係填表用完即棄，expenseModal本身唔屬於persisted/sync狀態，saveExpense入面亦冇攞呢個field，所以呢張相保證唔會落local storage/雲端（2026-09新增，用嚟喺填表嗰陣對住相抄資料）
   const [receiptLightbox, setReceiptLightbox] = useState(false); // 憑證大圖lightbox開關（純UI狀態）
-  const [quickLinks, setQuickLinks] = useState(() => persisted("quickLinks", [])); // {id, name, url} Admin設定嘅常用外部連結（買水/入貨網店、其他日常要開嘅外部網站，2026-09新增）
+  const [quickLinks, setQuickLinks] = useState(() => persisted("quickLinks", [])); // {id, name, url, dueDate?, repeat?("none"/"monthly"/"bimonthly"), reminderDays?} Admin設定嘅常用外部連結（買水/入貨網店、其他日常要開嘅外部網站，2026-09新增；到期提醒3個optional欄位2026-09新增）
   const [newQuickLinkForm, setNewQuickLinkForm] = useState({ name: "", url: "" });
+  const [linkReminderEdit, setLinkReminderEdit] = useState(null); // { id, dueDate, repeat, reminderDays } 常用連結到期提醒嘅暫存編輯表格，純UI狀態唔persist
+  const [dueLinkModal, setDueLinkModal] = useState(null); // 撳課表日曆到期chip彈出嘅連結詳情，純UI狀態唔persist
   const [delExpenseModal, setDelExpenseModal] = useState(null); // 待刪除嘅支出記錄
   const [voucherModal, setVoucherModal] = useState(null); // 準備生成憑證嘅支出記錄
   const [financeReportModal, setFinanceReportModal] = useState(null); // "monthly" | "annual" | null，匯出報表揀月份/財政年度嘅彈窗
@@ -799,6 +801,49 @@ export default function App() {
   const removeQuickLink = (id) => {
     setQuickLinks((prev) => prev.filter((l) => l.id !== id));
   };
+  // ---- 常用連結到期提醒（2026-09新增）：冇填到期日嘅link完全唔受影響，唔會出現喺日曆或者banner ----
+  const LINK_REPEAT_MONTHS = { none: 0, monthly: 1, bimonthly: 2 };
+  const dateDiffDays = (fromStr, toStr) => Math.round((new Date(`${toStr}T00:00:00`) - new Date(`${fromStr}T00:00:00`)) / 86400000);
+  // link嘅到期狀態：null=唔使理，"upcoming"=提醒期內未到期，"overdue"=已過期未完成
+  const linkDueState = (link) => {
+    if (!link.dueDate) return null;
+    const diff = dateDiffDays(formatDate(new Date()), link.dueDate); // 正數=仲有幾日到期，負數=已過期幾日
+    if (diff < 0) return { status: "overdue", days: -diff };
+    const lead = Number(link.reminderDays) || 0;
+    if (diff <= lead) return { status: "upcoming", days: diff };
+    return null;
+  };
+  // 撳「⏰ 到期提醒」展開/收埋某條link嘅編輯表格
+  const startLinkReminderEdit = (link) => {
+    setLinkReminderEdit({ id: link.id, dueDate: link.dueDate || "", repeat: link.repeat || "none", reminderDays: link.reminderDays ?? 3 });
+  };
+  const saveLinkReminder = () => {
+    if (!linkReminderEdit) return;
+    setQuickLinks((prev) => prev.map((l) => l.id === linkReminderEdit.id
+      ? { ...l, dueDate: linkReminderEdit.dueDate || "", repeat: linkReminderEdit.repeat, reminderDays: Number(linkReminderEdit.reminderDays) || 0 }
+      : l));
+    setLinkReminderEdit(null);
+    showToast("已儲存到期提醒");
+  };
+  // 撳「已完成」：到期日按重複設定自動推去下一期；冇設定重複就直接清空到期日（變返做冇提醒嘅普通link）
+  const markLinkDone = (id) => {
+    setQuickLinks((prev) => prev.map((l) => {
+      if (l.id !== id) return l;
+      const months = LINK_REPEAT_MONTHS[l.repeat] || 0;
+      const nextDue = months > 0 && l.dueDate ? addMonthsToDate(l.dueDate, months) : "";
+      return { ...l, dueDate: nextDue };
+    }));
+    setDueLinkModal(null);
+    showToast("已標記完成");
+  };
+  // 課表日曆某一日應唔應該出現到期chip：喺提醒期內（含到期日當日）或者已過期未完成，就一路顯示
+  const linkDueOnDate = (dateStr) => quickLinks.find((l) => {
+    if (!l.dueDate) return false;
+    const diff = dateDiffDays(dateStr, l.dueDate);
+    const lead = Number(l.reminderDays) || 0;
+    return diff <= lead;
+  });
+  const dueLinks = quickLinks.filter((l) => linkDueState(l));
 
   // ---- 文本範本庫（第10項重構）：admin可自由編輯/新增/刪除範本，撳「發送文本」揀教練+範本，自動代入{{教練名}}，時數留喺預覽度手動填 ----
   const addTemplate = () => {
@@ -2092,6 +2137,21 @@ export default function App() {
       <div style={S.appBg}>
         <Header title={isSubAdmin ? `副管理員 · ${currentUser.name}` : "管理員"} onLogout={logout} syncState={syncState} />
         {venueNotice && venueNotice.trim() && <div style={S.noticeBanner}>📢 {venueNotice}（教練都見到呢條公告）</div>}
+        {dueLinks.length > 0 && (
+          <div style={S.noticeBanner}>
+            {dueLinks.map((l) => {
+              const st = linkDueState(l);
+              return (
+                <div key={l.id} style={{ ...S.flexBetween, padding: "4px 0" }}>
+                  <span style={{ cursor: "pointer" }} onClick={() => window.open(l.url, "_blank", "noopener,noreferrer")}>
+                    {st.status === "overdue" ? `⚡ ${l.name}已過期 ${st.days} 日` : `⚡ ${l.name} ${st.days === 0 ? "今日到期" : `${st.days} 日後到期`}`}
+                  </span>
+                  <button style={S.linkBtn} onClick={() => markLinkDone(l.id)}>已完成</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div style={S.tabRow}>
           {visibleTabs.map(([k, icon, label]) => (
             <button key={k} style={adminTab === k ? S.tabActive : S.tab} onClick={() => setAdminTab(k)}><span style={S.tabIcon}><Icon name={icon} /></span><span>{label}</span></button>
@@ -2389,7 +2449,7 @@ export default function App() {
             <div style={S.calScroll}>
               <table style={S.table}>
                 <thead><tr><th style={S.thTime}></th>
-                  {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}</th>; })}
+                  {days.map((d) => { const closed = CLOSED_DAYS.includes(d.getDay()); const today = isTodayDate(d); const dueLink = linkDueOnDate(formatDate(d)); const dueSt = dueLink ? linkDueState(dueLink) : null; return <th key={d} style={{ ...S.th, background: today ? "#13302e" : undefined }}><div style={{ ...S.dayLabel, color: closed ? "#5a3030" : undefined }}>{formatDay(d)}</div><div style={{ ...S.dateLabel, color: closed ? "#555" : today ? "#4ECDC4" : undefined }}>{d.getDate()}</div>{today ? <div style={S.todayTag}>今日</div> : closed ? <div style={S.closedTag}>休息</div> : null}{dueLink && <div style={S.dueChip} onClick={() => setDueLinkModal(dueLink)}>{dueSt.status === "overdue" ? "⚡" : "💡"} {dueLink.name}</div>}</th>; })}
                 </tr></thead>
                 <tbody>
                   {TIME_SLOTS.map((time) => {
@@ -2967,14 +3027,45 @@ export default function App() {
                       <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>日常要開嘅外部網站（例如買水/入貨網店、電費、場地管理系統），加落呢度方便隨時撳出去，唔使自己搵書籤。</p>
                       {quickLinks.length === 0 ? <p style={S.emptyText}>暫無連結，喺下面新增一個先</p> : (
                         <div style={{ marginBottom: 14 }}>
-                          {quickLinks.map((l) => (
-                            <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #222", gap: 8 }}>
-                              <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, color: "#4ECDC4", fontWeight: 600, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                🔗 {l.name}
-                              </a>
-                              <button style={{ ...S.linkBtn, marginTop: 0, flexShrink: 0 }} onClick={() => removeQuickLink(l.id)}>刪除</button>
-                            </div>
-                          ))}
+                          {quickLinks.map((l) => {
+                            const st = linkDueState(l);
+                            const editing = linkReminderEdit?.id === l.id;
+                            return (
+                              <div key={l.id} style={{ padding: "10px 0", borderBottom: "1px solid #222" }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                                  <a href={l.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, color: "#4ECDC4", fontWeight: 600, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    🔗 {l.name}
+                                  </a>
+                                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                                    <button style={{ ...S.smallBtn, padding: "5px 9px", fontSize: 11.5 }} onClick={() => editing ? setLinkReminderEdit(null) : startLinkReminderEdit(l)}>⏰ 到期提醒</button>
+                                    <button style={{ ...S.linkBtn, marginTop: 0 }} onClick={() => removeQuickLink(l.id)}>刪除</button>
+                                  </div>
+                                </div>
+                                {st && (
+                                  <div style={{ display: "inline-block", marginTop: 6, fontSize: 11, color: "#FFB347", background: "#3a2a0f", border: "1px solid #5a4520", borderRadius: 6, padding: "2px 7px" }}>
+                                    {st.status === "overdue" ? `⚡ 已過期 ${st.days} 日` : `💡 ${st.days === 0 ? "今日到期" : `${st.days} 日後到期`}`}（{l.dueDate}，{l.repeat === "monthly" ? "每月" : l.repeat === "bimonthly" ? "每兩個月" : "唔重複"}）
+                                  </div>
+                                )}
+                                {editing && (
+                                  <div style={{ marginTop: 10, background: "#1a1b1e", border: "1px solid #25262a", borderRadius: 10, padding: 12 }}>
+                                    <Field label="到期日"><input style={S.input} type="date" value={linkReminderEdit.dueDate} onChange={(e) => setLinkReminderEdit({ ...linkReminderEdit, dueDate: e.target.value })} /></Field>
+                                    <Field label="重複">
+                                      <select style={S.select} value={linkReminderEdit.repeat} onChange={(e) => setLinkReminderEdit({ ...linkReminderEdit, repeat: e.target.value })}>
+                                        <option value="none">無</option>
+                                        <option value="monthly">每月</option>
+                                        <option value="bimonthly">每兩個月</option>
+                                      </select>
+                                    </Field>
+                                    <Field label="提前提醒（日）"><input style={S.input} type="number" min="0" value={linkReminderEdit.reminderDays} onChange={(e) => setLinkReminderEdit({ ...linkReminderEdit, reminderDays: e.target.value })} /></Field>
+                                    <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                                      <button style={{ ...S.smallBtn, flex: 1 }} onClick={() => setLinkReminderEdit(null)}>取消</button>
+                                      <button style={{ ...S.addBtn, flex: 1 }} onClick={saveLinkReminder}>儲存</button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                       <Field label="名稱"><input style={S.input} placeholder="例如「日常用品網店」" value={newQuickLinkForm.name} onChange={(e) => setNewQuickLinkForm({ ...newQuickLinkForm, name: e.target.value })} /></Field>
@@ -3822,6 +3913,22 @@ export default function App() {
             </div>
           </div></div>
         )}
+        {dueLinkModal && (() => {
+          const st = linkDueState(dueLinkModal);
+          return (
+            <div style={S.modalOverlay}><div style={{ ...S.modal, width: 320 }}>
+              <h3 style={S.modalTitle}>{st?.status === "overdue" ? "⚡" : "💡"} {dueLinkModal.name}</h3>
+              <p style={S.modalText}>
+                {st?.status === "overdue" ? `已過期 ${st.days} 日` : `${st?.days === 0 ? "今日到期" : `${st?.days} 日後到期`}`}。撳「開連結」去交錢，或者撳「已完成」推去下一期。
+              </p>
+              <button style={{ ...S.modalConfirm, width: "100%", marginBottom: 10 }} onClick={() => window.open(dueLinkModal.url, "_blank", "noopener,noreferrer")}>開連結</button>
+              <div style={S.modalBtns}>
+                <button style={S.modalCancel} onClick={() => setDueLinkModal(null)}>關閉</button>
+                <button style={{ ...S.modalConfirm, background: "#FFB347" }} onClick={() => markLinkDone(dueLinkModal.id)}>已完成</button>
+              </div>
+            </div></div>
+          );
+        })()}
         {financeReportModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>{financeReportModal === "monthly" ? "匯出每月收支報表" : "匯出年度報稅Excel"}</h3>
