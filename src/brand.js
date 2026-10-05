@@ -17,7 +17,7 @@ export const STAMP_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJ4AAACV
 
 // ---- 業務規則／價錢（每間公司可能唔同）----
 export const MAX_CONCURRENT = 2; // 場地同時最多幾位教練
-export const CHARTER_PRICE = 300; // 包場/小組 每節價錢（admin 落單時仍可自由改）
+export const CHARTER_PRICE = 200; // 包場/小組 每小時基本價錢（admin 落單時仍可自由改；1.5小時會自動變$300，2小時$400，如此類推）
 export const ASSIST_CANCEL_LIMIT = 1; // 每位教練每月「24小時內代取消」額度
 export const LOW_CREDIT_THRESHOLD = 2; // 剩餘時數 ≤ 此數 視為快用完
 // ---- Training Pass 制度（第9項）：教練買咗Pass之後，一律用 PASS_HOURLY_RATE 計費，唔理solo/duo/包場 ----
