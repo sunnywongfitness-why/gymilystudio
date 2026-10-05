@@ -72,6 +72,7 @@ export const S = {
   slotStudentsFull: { fontSize: 8, color: "#FFE66D", fontWeight: 700, lineHeight: 1.1, wordBreak: "break-word", overflow: "hidden" },
   slotBottomTime: { fontSize: 8, color: "#ffffffaa", lineHeight: 1.1, marginTop: "auto", whiteSpace: "nowrap", overflow: "hidden" },
   cancelSlotBtn: { background: "transparent", border: "none", color: "#fff", cursor: "pointer", fontSize: 10, padding: 0 },
+  editSlotBtn: { background: "transparent", border: "none", color: "#4ECDC4", cursor: "pointer", fontSize: 10, padding: 0, marginRight: 4 },
   slotEmpty: { width: "100%", minHeight: 20, background: "#1a1a1a", border: "none", borderRadius: 3, color: "#3a3a3a", fontSize: 13, cursor: "pointer" },
   slotEmptyRO: { minHeight: 20, background: "#1a1a1a", borderRadius: 3 },
   slotAdd: { width: 18, minHeight: 30, background: "#202020", border: "1px dashed #3a3a3a", borderRadius: 3, color: "#6BCB77", fontSize: 12, cursor: "pointer", flexShrink: 0 },

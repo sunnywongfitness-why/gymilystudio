@@ -1051,13 +1051,41 @@ export default function App() {
 
   // ADMIN: place a rental (包場/小組=全場2位, 試堂=1位), price editable
   const confirmCharter = () => {
-    const { date, time, charterType, price, coachName, trialSource } = charterModal;
+    const { date, time, charterType, price, coachName, trialSource, editing } = charterModal;
     const hours = Number(charterModal.hours) || 0;
     if (hours <= 0) { showToast("請輸入有效時長", "error"); return; }
     if (isClosedDay(date)) { showToast("休息日", "error"); return; }
     const need = charterType === "trial" ? 1 : MAX_CONCURRENT;
     const amt = ["trial", "clean"].includes(charterType) ? 0 : (parseInt(price) || 0);
     const repeatWeeks = charterType === "clean" ? Math.max(1, charterModal.repeatWeeks || 1) : 1;
+
+    // 修改現有記錄：唔改時長/時間，淨係更新類型／收費／負責教練／試堂來源，原位更新（唔係刪除重開）
+    if (editing) {
+      const { date: eDate, start: eStart, coachId: eCoachId } = editing;
+      const slots = slotsFor(eStart, hours);
+      const becomingWhole = charterType !== "trial";
+      if (becomingWhole) {
+        for (const s of slots) {
+          const others = cellArr(eDate, s).filter((e) => !(e.type === "charter" && e.coachId === eCoachId && e.start === eStart));
+          if (others.length > 0) { showToast("呢個時段仲有其他預約，唔可以改成需要全場嘅類型", "error"); return; }
+        }
+      }
+      setBookings((prev) => {
+        const u = { ...prev };
+        slots.forEach((s) => {
+          const key = `${eDate}_${s}`;
+          u[key] = (u[key] || []).map((e) =>
+            (e.type === "charter" && e.coachId === eCoachId && e.start === eStart)
+              ? { ...e, charterType, price: amt, coachName: coachName || "", trialSource: charterType === "trial" ? (trialSource || "company") : undefined, editedAt: nowStamp() }
+              : e
+          );
+        });
+        return u;
+      });
+      showToast(`已更新${rentalFull(charterType)}（$${amt}）`);
+      setCharterModal(null);
+      return;
+    }
 
     if (repeatWeeks === 1) {
       const err = canPlace(date, time, hours, need);
@@ -1101,6 +1129,17 @@ export default function App() {
     setCharterLog((prev) => [...logsToAdd, ...prev]);
     showToast(skippedDates.length === 0 ? `已成功預約 ${okCount} 週清潔` : `已預約 ${okCount} 週清潔，跳過 ${skippedDates.length} 週：${skippedDates.join("、")}`);
     setCharterModal(null);
+  };
+
+  // 修改現有「其他租場」記錄：撳格仔上嘅 ✎ 開呢個，預填返原本資料（類型／收費／負責教練），
+  // 時長／時間保持不變（避免重新檢查場地衝突），改好之後 confirmCharter() 會原位更新，唔會刪除重開
+  const openEditCharter = (date, entry) => {
+    setCharterModal({
+      date, time: entry.start, hours: entry.hours, charterType: entry.charterType,
+      price: entry.price || 0, priceTouched: true, coachName: entry.coachName || "",
+      trialSource: entry.trialSource || "company", repeatWeeks: 1,
+      editing: { date, start: entry.start, coachId: entry.coachId },
+    });
   };
 
   // Admin 代教練 book 堂：同教練自己 book 嘅邏輯一樣（扣嗰位教練嘅時數），完成後生成一段文字畀 admin 自己複製去send
@@ -2418,6 +2457,7 @@ export default function App() {
                                 return (
                                   <div style={{ ...S.slotChip, background: "#ffffff22", borderLeft: "3px solid #fff" }}>
                                     {node}
+                                    {relRow === 0 && <button style={S.editSlotBtn} onClick={() => openEditCharter(date, whole)}>✎</button>}
                                     {relRow === 0 && <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: whole.start, coachId: whole.coachId, type: "charter" })}>✕</button>}
                                   </div>
                                 );
@@ -2436,6 +2476,7 @@ export default function App() {
                                     return (
                                       <div key={idx} style={{ ...S.slotChip, background: isTrial ? "#ffffff22" : c?.color + "33", borderLeft: `3px solid ${isTrial ? "#fff" : c?.color}` }}>
                                         {node}
+                                        {relRow === 0 && v.type === "charter" && <button style={S.editSlotBtn} onClick={() => openEditCharter(date, v)}>✎</button>}
                                         {relRow === 0 && <button style={S.cancelSlotBtn} onClick={() => setAdminCancelModal({ date, start: v.start, coachId: v.coachId, type: v.type })}>✕</button>}
                                       </div>
                                     );
@@ -3272,15 +3313,15 @@ export default function App() {
 
         {charterModal && (
           <div style={S.modalOverlay}><div style={{ ...S.modal, textAlign: "left" }}>
-            <h3 style={{ ...S.modalTitle, textAlign: "center" }}>其他租場</h3>
+            <h3 style={{ ...S.modalTitle, textAlign: "center" }}>{charterModal.editing ? "修改其他租場記錄" : "其他租場"}</h3>
             <p style={{ ...S.modalText, textAlign: "center" }}>{charterModal.date}　{charterModal.time}</p>
 
             <label style={S.label}>類型</label>
             <div style={S.segRow}>
-              <button style={charterModal.charterType === "private" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "private", price: ["trial", "clean"].includes(charterModal.charterType) ? CHARTER_PRICE : charterModal.price })}>私人包場</button>
-              <button style={charterModal.charterType === "group" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "group", price: ["trial", "clean"].includes(charterModal.charterType) ? CHARTER_PRICE : charterModal.price })}>小組訓練</button>
-              <button style={charterModal.charterType === "trial" ? S.segActive : S.seg} onClick={() => { const next = trialNextFor(); setCharterModal({ ...charterModal, charterType: "trial", price: 0, coachName: next ? next.name : charterModal.coachName }); }}>試堂</button>
-              <button style={charterModal.charterType === "clean" ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, charterType: "clean", price: 0 })}>🧹 清潔</button>
+              <button style={charterModal.charterType === "private" ? S.segActive : S.seg} onClick={() => setCharterModal((m) => { const fromFree = ["trial", "clean"].includes(m.charterType); const hrs = Number(m.hours) || 0; return { ...m, charterType: "private", price: fromFree ? CHARTER_PRICE * hrs : m.price, priceTouched: fromFree ? false : m.priceTouched }; })}>私人包場</button>
+              <button style={charterModal.charterType === "group" ? S.segActive : S.seg} onClick={() => setCharterModal((m) => { const fromFree = ["trial", "clean"].includes(m.charterType); const hrs = Number(m.hours) || 0; return { ...m, charterType: "group", price: fromFree ? CHARTER_PRICE * hrs : m.price, priceTouched: fromFree ? false : m.priceTouched }; })}>小組訓練</button>
+              <button style={charterModal.charterType === "trial" ? S.segActive : S.seg} onClick={() => { const next = trialNextFor(); setCharterModal((m) => ({ ...m, charterType: "trial", price: 0, coachName: next ? next.name : m.coachName })); }}>試堂</button>
+              <button style={charterModal.charterType === "clean" ? S.segActive : S.seg} onClick={() => setCharterModal((m) => ({ ...m, charterType: "clean", price: 0 }))}>🧹 清潔</button>
             </div>
             {charterModal.charterType === "trial"
               ? <p style={{ ...S.assistHint, marginTop: 6 }}>試堂只佔 1 個位，同一時段仲可以有教練 book，唔收費。</p>
@@ -3289,18 +3330,24 @@ export default function App() {
               : <p style={{ ...S.assistHint, marginTop: 6 }}>包場／小組會獨佔全場（2 位）。</p>}
 
             <label style={{ ...S.label, marginTop: 14 }}>時長</label>
-            <div style={S.segRow}>
-              {[1, 1.5, 2].map((h) => (
-                <button key={h} style={charterModal.hours === h ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, hours: h })}>{h} 小時</button>
-              ))}
-              <button style={![1, 1.5, 2].includes(charterModal.hours) ? S.segActive : S.seg} onClick={() => setCharterModal({ ...charterModal, hours: 3 })}>其他</button>
-            </div>
-            {![1, 1.5, 2].includes(charterModal.hours) && (
-              <div style={{ marginTop: 8 }}>
-                <label style={S.label}>自訂時長（小時，可 0.25 為一格）</label>
-                <input style={S.input} type="number" step="0.25" min="0.25" value={charterModal.hours}
-                  onChange={(e) => setCharterModal({ ...charterModal, hours: e.target.value })} />
-              </div>
+            {charterModal.editing ? (
+              <p style={{ ...S.assistHint, marginTop: 6 }}>{charterModal.hours} 小時（修改記錄唔支援改時長；如要改時長，請先取消再重新預約）</p>
+            ) : (
+              <>
+                <div style={S.segRow}>
+                  {[1, 1.5, 2].map((h) => (
+                    <button key={h} style={charterModal.hours === h ? S.segActive : S.seg} onClick={() => setCharterModal((m) => ({ ...m, hours: h, price: (!m.priceTouched && !["trial", "clean"].includes(m.charterType)) ? CHARTER_PRICE * h : m.price }))}>{h} 小時</button>
+                  ))}
+                  <button style={![1, 1.5, 2].includes(charterModal.hours) ? S.segActive : S.seg} onClick={() => setCharterModal((m) => ({ ...m, hours: 3, price: (!m.priceTouched && !["trial", "clean"].includes(m.charterType)) ? CHARTER_PRICE * 3 : m.price }))}>其他</button>
+                </div>
+                {![1, 1.5, 2].includes(charterModal.hours) && (
+                  <div style={{ marginTop: 8 }}>
+                    <label style={S.label}>自訂時長（小時，可 0.25 為一格）</label>
+                    <input style={S.input} type="number" step="0.25" min="0.25" value={charterModal.hours}
+                      onChange={(e) => setCharterModal((m) => { const hn = Number(e.target.value) || 0; return { ...m, hours: e.target.value, price: (!m.priceTouched && !["trial", "clean"].includes(m.charterType)) ? CHARTER_PRICE * hn : m.price }; })} />
+                  </div>
+                )}
+              </>
             )}
 
             <label style={{ ...S.label, marginTop: 14 }}>負責教練</label>
@@ -3331,7 +3378,7 @@ export default function App() {
               </>
             )}
 
-            {charterModal.charterType === "clean" && (
+            {charterModal.charterType === "clean" && !charterModal.editing && (
               <>
                 <label style={{ ...S.label, marginTop: 14 }}>每週重複（同一星期幾、同一時間）</label>
                 <div style={S.segRow}>
@@ -3348,7 +3395,7 @@ export default function App() {
               <>
                 <label style={{ ...S.label, marginTop: 14 }}>收費 ($，可自由修改)</label>
                 <input style={S.input} type="number" min="0" value={charterModal.price}
-                  onChange={(e) => setCharterModal({ ...charterModal, price: e.target.value })} />
+                  onChange={(e) => setCharterModal({ ...charterModal, price: e.target.value, priceTouched: true })} />
               </>
             )}
 
@@ -3359,7 +3406,7 @@ export default function App() {
             </div>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => setCharterModal(null)}>返回</button>
-              <button style={S.modalConfirm} onClick={confirmCharter}>確認落單</button>
+              <button style={S.modalConfirm} onClick={confirmCharter}>{charterModal.editing ? "儲存修改" : "確認落單"}</button>
             </div>
           </div></div>
         )}
@@ -3370,7 +3417,7 @@ export default function App() {
             <p style={S.modalText}>{slotChoiceModal.date}　{slotChoiceModal.time}</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <button style={S.loginBtn} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setAdminCoachBookModal({ date, time, coachId: coaches[0]?.id || null, sessionType: "solo", hours: 1, students: [] }); }}>👤 代教練 Book 堂</button>
-              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff" }} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, coachName: "", trialSource: "company" }); }}>🏟️ 包場／小組／試堂</button>
+              <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff" }} onClick={() => { const { date, time } = slotChoiceModal; setSlotChoiceModal(null); setCharterModal({ date, time, charterType: "private", hours: 1, price: CHARTER_PRICE, priceTouched: false, coachName: "", trialSource: "company" }); }}>🏟️ 包場／小組／試堂</button>
             </div>
             <button style={{ ...S.modalCancel, marginTop: 14, width: "100%" }} onClick={() => setSlotChoiceModal(null)}>取消</button>
           </div></div>
