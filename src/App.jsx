@@ -131,6 +131,7 @@ export default function App() {
   const [delExpenseModal, setDelExpenseModal] = useState(null); // 待刪除嘅支出記錄
   const [expMonth, setExpMonth] = useState("all"); // 支出記錄list嘅月份篩選，"all" = 全部月份；跟r.date本身（唔係建立時間at），2026-10新增
   const [expStatusFilter, setExpStatusFilter] = useState("all"); // "all" | "unpaid" | "paid"，撳「未歸還總額」banner可以一鍵切去"unpaid"
+  const [expCategory, setExpCategory] = useState("all"); // 支出記錄list嘅類別篩選，"all" 或 EXPENSE_CATEGORIES 其中一個（例如「電費」「電話及上網」），2026-10新增
   const [voucherModal, setVoucherModal] = useState(null); // 準備生成憑證嘅支出記錄
   const [financeReportModal, setFinanceReportModal] = useState(null); // "monthly" | "annual" | null，匯出報表揀月份/財政年度嘅彈窗
   const [reportMonth, setReportMonth] = useState(() => monthKey(formatDate(new Date())));
@@ -1782,6 +1783,35 @@ export default function App() {
     }
   };
 
+  // ---- 匯出「支出記錄」list目前嘅篩選結果（跟住expCategory/expMonth/expStatusFilter），
+  // 主要畀「淨係睇某個類別（例如電費／電話及上網）」嗰陣可以直接匯出嗰批記錄，2026-10新增 ----
+  const exportFilteredExpenses = async (rows, labelParts) => {
+    try {
+      const XLSX = await import("xlsx-js-style");
+      const wb = XLSX.utils.book_new();
+      const sorted = rows.slice().sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.voucherNo || "").localeCompare(b.voucherNo || ""));
+      const detailRows = sorted.map((r) => ({
+        憑證編號: r.voucherNo, 日期: r.date, 類別: r.category, 代付人: r.payer,
+        物品: r.items.map((it) => `${it.name}$${it.amount}`).join("、"), 金額: r.amount,
+        歸還狀態: r.status === "paid" ? "已歸還" : "未歸還",
+      }));
+      const total = sorted.reduce((s, r) => s + r.amount, 0);
+      detailRows.push({ 憑證編號: "", 日期: "", 類別: "", 代付人: "", 物品: "合計", 金額: total, 歸還狀態: "" });
+      const ws = XLSX.utils.json_to_sheet(detailRows.length ? detailRows : [{ 憑證編號: "", 日期: "", 類別: "", 代付人: "", 物品: "", 金額: "", 歸還狀態: "" }]);
+      XLSX.utils.book_append_sheet(wb, ws, "支出");
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${BRAND_NAME}_支出_${labelParts.join("_")}.xlsx`;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      showToast("已匯出支出記錄");
+    } catch (e) {
+      showToast("匯出失敗，請重試", "error");
+    }
+  };
+
   // ---- 年度報稅Excel（俾會計師用，跟財政年度4月1日至3月31日切，唔係calendar year，見§4.2）----
   const exportAnnualTaxReport = async (fyStartYear) => {
     try {
@@ -2709,9 +2739,10 @@ export default function App() {
             ) : (() => {
               // 未歸還總額：永遠計全部記錄（唔受月份/狀態篩選影響），等admin隨時知道總共欠幾多
               const unpaidTotal = expenseLog.filter((r) => r.status !== "paid").reduce((s, r) => s + r.amount, 0);
-              // 月份/歸還狀態篩選：分類一律跟記錄本身嘅 r.date（唔係建立時間 at），等2026-09-14嘅支出揀「2026-09」一定搵到
+              // 月份/類別/歸還狀態篩選：分類一律跟記錄本身嘅 r.date（唔係建立時間 at），等2026-09-14嘅支出揀「2026-09」一定搵到
               const filteredExpenses = expenseLog.filter((r) =>
                 (expMonth === "all" || monthKey(r.date) === expMonth) &&
+                (expCategory === "all" || r.category === expCategory) &&
                 (expStatusFilter === "all" || (expStatusFilter === "unpaid" ? r.status !== "paid" : r.status === "paid"))
               );
               const sortedExpenses = filteredExpenses.slice().sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.voucherNo || "").localeCompare(a.voucherNo || ""));
@@ -2725,9 +2756,13 @@ export default function App() {
                   </div>
                 </div>
                 <div style={{ ...S.flexBetween, marginTop: 10, flexWrap: "wrap", gap: 8 }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <input style={S.select} type="month" value={expMonth === "all" ? "" : expMonth} onChange={(e) => setExpMonth(e.target.value || "all")} />
                     {expMonth !== "all" && <button style={S.linkBtn} onClick={() => setExpMonth("all")}>睇全部月份</button>}
+                    <select style={S.select} value={expCategory} onChange={(e) => setExpCategory(e.target.value)}>
+                      <option value="all">全部類別</option>
+                      {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
                   </div>
                   <div style={S.segRow}>
                     <button style={expStatusFilter === "all" ? S.segActive : S.seg} onClick={() => setExpStatusFilter("all")}>全部</button>
@@ -2735,9 +2770,20 @@ export default function App() {
                     <button style={expStatusFilter === "paid" ? S.segActive : S.seg} onClick={() => setExpStatusFilter("paid")}>已歸還</button>
                   </div>
                 </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  <span style={S.assistHint}>快捷：</span>
+                  <button style={expCategory === "電費" ? S.segActive : S.seg} onClick={() => setExpCategory(expCategory === "電費" ? "all" : "電費")}>⚡ 電費</button>
+                  <button style={expCategory === "電話及上網" ? S.segActive : S.seg} onClick={() => setExpCategory(expCategory === "電話及上網" ? "all" : "電話及上網")}>📶 電話及上網</button>
+                  {(expCategory !== "all" || expMonth !== "all" || expStatusFilter !== "all") && sortedExpenses.length > 0 && (
+                    <button style={S.smallBtn} onClick={() => {
+                      const parts = [expCategory === "all" ? "全部類別" : expCategory, expMonth === "all" ? "全部月份" : expMonth, expStatusFilter === "all" ? "全部狀態" : (expStatusFilter === "unpaid" ? "未歸還" : "已歸還")];
+                      exportFilteredExpenses(sortedExpenses, parts);
+                    }}>📥 匯出呢個篩選（共$<span>{sortedExpenses.reduce((s, r) => s + r.amount, 0).toLocaleString()}</span>）</button>
+                  )}
+                </div>
                 {unpaidTotal > 0 && (
                   <div style={{ background: "#3a2a0f", border: "1px solid #5a4520", borderRadius: 10, padding: "10px 14px", margin: "14px 0", color: "#FFB347", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
-                    onClick={() => { setExpMonth("all"); setExpStatusFilter("unpaid"); }}>
+                    onClick={() => { setExpMonth("all"); setExpCategory("all"); setExpStatusFilter("unpaid"); }}>
                     ⚠️ 未歸還總額：${unpaidTotal.toLocaleString()}（撳呢度一鍵睇晒未歸還）
                   </div>
                 )}
