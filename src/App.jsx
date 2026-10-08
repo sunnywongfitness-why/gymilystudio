@@ -129,6 +129,8 @@ export default function App() {
   const [quickLinks, setQuickLinks] = useState(() => persisted("quickLinks", [])); // {id, name, url} Admin設定嘅常用外部連結（買水/入貨網店、其他日常要開嘅外部網站，2026-09新增）
   const [newQuickLinkForm, setNewQuickLinkForm] = useState({ name: "", url: "" });
   const [delExpenseModal, setDelExpenseModal] = useState(null); // 待刪除嘅支出記錄
+  const [expMonth, setExpMonth] = useState("all"); // 支出記錄list嘅月份篩選，"all" = 全部月份；跟r.date本身（唔係建立時間at），2026-10新增
+  const [expStatusFilter, setExpStatusFilter] = useState("all"); // "all" | "unpaid" | "paid"，撳「未歸還總額」banner可以一鍵切去"unpaid"
   const [voucherModal, setVoucherModal] = useState(null); // 準備生成憑證嘅支出記錄
   const [financeReportModal, setFinanceReportModal] = useState(null); // "monthly" | "annual" | null，匯出報表揀月份/財政年度嘅彈窗
   const [reportMonth, setReportMonth] = useState(() => monthKey(formatDate(new Date())));
@@ -2705,8 +2707,14 @@ export default function App() {
                 <p style={S.assistHint}>※ 呢度純粹記錄「話咗轉數」，系統唔會自動核實款項有冇真係入到。</p>
               </>
             ) : (() => {
+              // 未歸還總額：永遠計全部記錄（唔受月份/狀態篩選影響），等admin隨時知道總共欠幾多
               const unpaidTotal = expenseLog.filter((r) => r.status !== "paid").reduce((s, r) => s + r.amount, 0);
-              const sortedExpenses = expenseLog.slice().sort((a, b) => (b.at || b.date || "").localeCompare(a.at || a.date || ""));
+              // 月份/歸還狀態篩選：分類一律跟記錄本身嘅 r.date（唔係建立時間 at），等2026-09-14嘅支出揀「2026-09」一定搵到
+              const filteredExpenses = expenseLog.filter((r) =>
+                (expMonth === "all" || monthKey(r.date) === expMonth) &&
+                (expStatusFilter === "all" || (expStatusFilter === "unpaid" ? r.status !== "paid" : r.status === "paid"))
+              );
+              const sortedExpenses = filteredExpenses.slice().sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.voucherNo || "").localeCompare(a.voucherNo || ""));
               return (
               <>
                 <div style={{ ...S.flexBetween, marginTop: 14, flexWrap: "wrap", gap: 8 }}>
@@ -2716,13 +2724,25 @@ export default function App() {
                     <button style={S.smallBtn} onClick={() => setFinanceReportModal("annual")}>📑 年度報稅Excel</button>
                   </div>
                 </div>
+                <div style={{ ...S.flexBetween, marginTop: 10, flexWrap: "wrap", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input style={S.select} type="month" value={expMonth === "all" ? "" : expMonth} onChange={(e) => setExpMonth(e.target.value || "all")} />
+                    {expMonth !== "all" && <button style={S.linkBtn} onClick={() => setExpMonth("all")}>睇全部月份</button>}
+                  </div>
+                  <div style={S.segRow}>
+                    <button style={expStatusFilter === "all" ? S.segActive : S.seg} onClick={() => setExpStatusFilter("all")}>全部</button>
+                    <button style={expStatusFilter === "unpaid" ? S.segActive : S.seg} onClick={() => setExpStatusFilter("unpaid")}>未歸還</button>
+                    <button style={expStatusFilter === "paid" ? S.segActive : S.seg} onClick={() => setExpStatusFilter("paid")}>已歸還</button>
+                  </div>
+                </div>
                 {unpaidTotal > 0 && (
-                  <div style={{ background: "#3a2a0f", border: "1px solid #5a4520", borderRadius: 10, padding: "10px 14px", margin: "14px 0", color: "#FFB347", fontWeight: 700, fontSize: 13 }}>
-                    ⚠️ 未歸還總額：${unpaidTotal.toLocaleString()}
+                  <div style={{ background: "#3a2a0f", border: "1px solid #5a4520", borderRadius: 10, padding: "10px 14px", margin: "14px 0", color: "#FFB347", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
+                    onClick={() => { setExpMonth("all"); setExpStatusFilter("unpaid"); }}>
+                    ⚠️ 未歸還總額：${unpaidTotal.toLocaleString()}（撳呢度一鍵睇晒未歸還）
                   </div>
                 )}
                 <div style={{ ...S.bookingList, marginTop: 14 }}>
-                  {sortedExpenses.length === 0 ? <p style={S.emptyText}>暫無支出記錄</p> : sortedExpenses.map((r) => (
+                  {sortedExpenses.length === 0 ? <p style={S.emptyText}>{expMonth === "all" && expStatusFilter === "all" ? "暫無支出記錄" : "呢個篩選條件下冇記錄"}</p> : sortedExpenses.map((r) => (
                     <div key={r.id} style={S.bookingItem}>
                       <div style={{ ...S.dot, background: r.status === "paid" ? "#6BCB77" : "#FFB347" }} />
                       <div style={{ flex: 1 }}>
