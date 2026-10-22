@@ -1011,6 +1011,27 @@ export default function App() {
     link.href = canvas.toDataURL("image/jpeg", 0.92); // JPEG而唔用PNG：張相本身係相機相，JPEG檔案細好多，畫質肉眼睇落冇分別
     link.click();
   };
+  // 同上，但用系統分享選單（Web Share API）傳去Google Drive等App；唔支援就fallback做下載，撳走分享（AbortError）唔當錯誤
+  const shareReceiptPhoto = async () => {
+    const canvas = receiptCanvasRef.current;
+    if (!canvas) return;
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+      if (!blob) { showToast("分享失敗，請重試", "error"); return; }
+      const existing = expenseModal?.id ? expenseLog.find((r) => r.id === expenseModal.id) : null;
+      const name = `${existing?.voucherNo || `憑證_${expenseModal?.date || "receipt"}`}.jpg`;
+      const file = new File([blob], name, { type: "image/jpeg" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: name });
+      } else {
+        downloadReceiptPhoto();
+        showToast("呢部裝置唔支援分享，已改為下載", "error");
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+      showToast("分享失敗，請重試", "error");
+    }
+  };
   useEffect(() => { // 憑證大圖開住嗰陣，日期/物品/代付人一改就即時redraw個overlay
     if (receiptLightbox) drawReceiptOverlay();
   }, [receiptLightbox, expenseModal?.date, expenseModal?.items, expenseModal?.payer, expenseModal?.receiptPhoto]);
@@ -3923,11 +3944,12 @@ export default function App() {
         {receiptLightbox && expenseModal?.receiptPhoto && (
           <div style={{ ...S.modalOverlay, zIndex: 300, flexDirection: "column" }} onClick={(e) => { if (e.target === e.currentTarget) setReceiptLightbox(false); }}>
             <canvas ref={receiptCanvasRef} style={{ maxWidth: "94vw", maxHeight: "66vh", borderRadius: 12, boxShadow: "0 10px 40px rgba(0,0,0,.6)" }} />
-            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-              <button style={{ ...S.modalConfirm, padding: "12px 22px" }} onClick={downloadReceiptPhoto}>⬇ 下載呢張相（連資料）</button>
+            <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap", justifyContent: "center" }}>
+              <button style={{ ...S.modalConfirm, padding: "12px 22px" }} onClick={downloadReceiptPhoto}>⬇ 下載（連資料）</button>
+              <button style={{ ...S.modalConfirm, padding: "12px 22px", background: "#2a2a2a", color: "#4ECDC4" }} onClick={shareReceiptPhoto}>📤 分享（存去Drive）</button>
               <button style={{ ...S.modalCancel, padding: "12px 22px" }} onClick={() => setReceiptLightbox(false)}>關閉</button>
             </div>
-            <p style={{ color: "#777", fontSize: 11, marginTop: 10, textAlign: "center", maxWidth: 320 }}>呢個「下載」淨係將相＋資料匯出做一張圖檔存落你部機，唔會入返記錄；下面平時嗰個「儲存」淨係存支出嘅文字記錄，唔包相。</p>
+            <p style={{ color: "#777", fontSize: 11, marginTop: 10, textAlign: "center", maxWidth: 320 }}>「下載」「分享」都係將相＋資料匯出做一張圖檔，唔會入返記錄；想存Google Drive就撳「分享」再揀Drive同資料夾。下面平時嗰個「儲存」淨係存支出嘅文字記錄，唔包相。</p>
           </div>
         )}
         {delExpenseModal && (
