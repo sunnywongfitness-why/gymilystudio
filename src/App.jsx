@@ -1039,6 +1039,25 @@ export default function App() {
       showToast("生成憑證失敗，請重試", "error");
     }
   };
+  // 生成憑證後用系統「分享」選單傳去Google Drive等App（Web Share API，純前端，唔使Google授權/後端）。
+  // 唔支援（例如部分電腦瀏覽器）就自動fallback做普通download。用戶撳走分享選單（AbortError）唔當錯誤。
+  const shareExpenseVoucher = async (record, receiptFile) => {
+    try {
+      const blob = await buildExpenseVoucherBlob(record, receiptFile);
+      const file = new File([blob], `${record.voucherNo}.jpg`, { type: "image/jpeg" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: record.voucherNo });
+        return true;
+      }
+      await downloadExpenseVoucher(record, receiptFile);
+      showToast("呢部裝置唔支援分享，已改為下載", "error");
+      return true;
+    } catch (e) {
+      if (e && e.name === "AbortError") return false;
+      showToast("分享失敗，請重試", "error");
+      return false;
+    }
+  };
   // Admin手動調整教練「已用時數」：處理歷史誤差（例如duo扣減公式改過，舊交易退款金額對唔上），連埋備註方便追溯
   const adjustCoachUsed = (coachId, used, note) => {
     const coach = getCoach(coachId);
@@ -3928,11 +3947,12 @@ export default function App() {
             <p style={S.modalText}>{voucherModal.category}　${voucherModal.amount.toLocaleString()}　{voucherModal.voucherNo}</p>
             <label style={S.label}>單據相（可選，唔上傳都得）</label>
             <input style={{ ...S.input, padding: "8px" }} type="file" accept="image/*" onChange={(e) => setVoucherReceiptFile(e.target.files?.[0] || null)} />
-            <p style={S.assistHint}>※ 有相就將支出資料疊喺相右下角；冇相就生成一張獨立嘅資料卡。呢張圖只會download到你部裝置，唔會上傳雲端。</p>
+            <p style={S.assistHint}>※ 有相就將支出資料疊喺相右下角；冇相就生成一張獨立嘅資料卡。呢張圖唔會上傳去呢個App嘅雲端；想存Google Drive，撳「分享」再喺選單揀Drive同資料夾。</p>
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => { setVoucherModal(null); setVoucherReceiptFile(null); }}>取消</button>
               <button style={S.modalConfirm} onClick={async () => { await downloadExpenseVoucher(voucherModal, voucherReceiptFile); setVoucherModal(null); setVoucherReceiptFile(null); }}>生成並下載</button>
             </div>
+            <button style={{ ...S.modalConfirm, width: "100%", marginTop: 10, background: "#2a2a2a", color: "#4ECDC4" }} onClick={async () => { const ok = await shareExpenseVoucher(voucherModal, voucherReceiptFile); if (ok) { setVoucherModal(null); setVoucherReceiptFile(null); } }}>📤 分享（存去Google Drive）</button>
           </div></div>
         )}
         {financeReportModal && (
