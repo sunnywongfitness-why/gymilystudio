@@ -1057,7 +1057,7 @@ export default function App() {
       setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
       showToast("已生成憑證，請查看下載");
     } catch (e) {
-      showToast("生成憑證失敗，請重試", "error");
+      showToast(`生成憑證失敗：${describeGenError(e)}`, "error");
     }
   };
   // 生成憑證後用系統「分享」選單傳去Google Drive等App（Web Share API，純前端，唔使Google授權/後端）。
@@ -1075,7 +1075,7 @@ export default function App() {
       return true;
     } catch (e) {
       if (e && e.name === "AbortError") return false;
-      showToast("分享失敗，請重試", "error");
+      showToast(`分享失敗：${describeGenError(e)}`, "error");
       return false;
     }
   };
@@ -1562,12 +1562,20 @@ export default function App() {
   const sheetName = (s) => (s || "").replace(/[:\\/?*[\]]/g, " ").slice(0, 28).trim() || "Sheet";
   const fmtMoney = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // 生成失敗時顯示真正原因（唔再淨係「請再試」）；動態載入模組失敗（通常係舊版快取）就直接教人重新整理
+  const describeGenError = (e) => {
+    const msg = String((e && (e.message || e.name)) || e || "未知錯誤");
+    if (/dynamically imported module|Importing a module script failed|Failed to fetch|Loading chunk/i.test(msg)) return "載入元件失敗，多數係舊版快取，請重新整理頁面（電腦：Cmd/Ctrl+Shift+R）後再試";
+    return msg.slice(0, 80);
+  };
+
   // 生成Invoice（PDF），跟住公司提供嗰張範本排版；個性化資料（Bill to / Contact Person）留空，
   // 其他全部自動帶入；公司印章自動貼上。通用化：購買堂數／飲品銷售都經呢個function，淨係lineItems/paymentTerms/sameDayList唔同，
   // Invoice編號用返同一條全域invoiceCounter，兩種嚟源共用一條連續編號。
   // opts: { coachName, date, id, paymentTerms, lineItems:[{description,qty,unitPrice,amount}], totalAmount, sameDayList }
+  // opts.mode: "download"（預設）直接下載；"share" 用系統分享選單（Web Share API）傳去Google Drive等App，唔支援就fallback下載
   const generateInvoicePDF = async (opts) => {
-    const { coachName, date, id, paymentTerms, lineItems, totalAmount, sameDayList } = opts;
+    const { coachName, date, id, paymentTerms, lineItems, totalAmount, sameDayList, mode = "download" } = opts;
     try {
       const { PDFDocument, rgb, StandardFonts } = await import("pdf-lib");
       const teal = rgb(...INVOICE_THEME_RGB);
@@ -1673,20 +1681,42 @@ export default function App() {
 
       const pdfBytes = await pdfDoc.save();
       const blob = new Blob([pdfBytes], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
       // 檔名跟返日期：Invoice_YYYY-MM-DD.pdf；同一日如果多過一張，第二張起加_01、_02...（按實際落單先後排）
       const sameDayRecords = sameDayList.filter((r) => r.date === date).slice().reverse(); // log都係新到舊prepend，reverse返做由舊到新
       const dayIdx = sameDayRecords.findIndex((r) => r.id === id);
       const suffix = dayIdx > 0 ? `_${String(dayIdx).padStart(2, "0")}` : "";
-      a.href = url; a.download = `Invoice_${date}${suffix}.pdf`;
-      document.body.appendChild(a); a.click();
-      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      const fileName = `Invoice_${date}${suffix}.pdf`;
+      const downloadIt = () => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = fileName;
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+      };
+      if (mode === "share") {
+        const file = new File([blob], fileName, { type: "application/pdf" });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: fileName });
+          } catch (e) {
+            if (e && e.name === "AbortError") return; // 用戶撳走分享選單：冇交付，唔計發票編號
+            throw e;
+          }
+          setInvoiceCounter((n) => n + 1);
+          showToast(`已分享發票 ${invoiceNo}`);
+          return;
+        }
+        downloadIt();
+        setInvoiceCounter((n) => n + 1);
+        showToast(`呢部裝置唔支援分享，已改為下載發票 ${invoiceNo}`, "error");
+        return;
+      }
+      downloadIt();
       setInvoiceCounter((n) => n + 1);
       showToast(`已生成發票 ${invoiceNo}`);
     } catch (e) {
       console.error(e);
-      showToast("生成發票失敗，請再試", "error");
+      showToast(`生成發票失敗：${describeGenError(e)}`, "error");
     }
   };
 
@@ -2632,6 +2662,7 @@ export default function App() {
                       <div style={S.revenueNum}>+${r.amount.toLocaleString()}</div>
                       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                         <button style={S.linkBtn} onClick={() => generateInvoicePDF({ coachName: r.coachName, date: r.date, id: r.id, paymentTerms: "Lesson", lineItems: [{ description: "Purchase Lesson from coach", qty: r.qty, unitPrice: r.rate, amount: r.amount }], totalAmount: r.amount, sameDayList: purchaseLog })}>🧾 開發票</button>
+                        <button style={S.linkBtn} onClick={() => generateInvoicePDF({ coachName: r.coachName, date: r.date, id: r.id, paymentTerms: "Lesson", lineItems: [{ description: "Purchase Lesson from coach", qty: r.qty, unitPrice: r.rate, amount: r.amount }], totalAmount: r.amount, sameDayList: purchaseLog, mode: "share" })}>📤 分享</button>
                         <button style={S.linkBtn} onClick={() => setEditDateRec({ id: r.id, date: r.date })}>改日期</button>
                         <button style={{ ...S.linkBtn, color: "#FF6B6B" }} onClick={() => setDelLedgerModal(r)}>剷除</button>
                       </div>
@@ -2768,6 +2799,7 @@ export default function App() {
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         <button style={S.smallBtn} onClick={() => generateInvoicePDF({ coachName: s.coachName, date: s.date, id: s.id, paymentTerms: "Drink", lineItems: s.items.map((it) => ({ description: it.name, qty: it.qty, unitPrice: it.price, amount: it.price * it.qty })), totalAmount: s.amount, sameDayList: drinkSalesLog })}>🧾 開發票</button>
+                        <button style={S.smallBtn} onClick={() => generateInvoicePDF({ coachName: s.coachName, date: s.date, id: s.id, paymentTerms: "Drink", lineItems: s.items.map((it) => ({ description: it.name, qty: it.qty, unitPrice: it.price, amount: it.price * it.qty })), totalAmount: s.amount, sameDayList: drinkSalesLog, mode: "share" })}>📤 分享發票</button>
                         <button style={S.smallBtn} onClick={() => setEditDrinkSaleModal({ id: s.id, items: s.items.map((it) => ({ ...it })) })}>編輯</button>
                         <button style={S.delBtn} onClick={() => setDelDrinkSaleModal(s)}>剷除</button>
                       </div>
