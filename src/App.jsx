@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 // pdf-lib同xlsx改做dynamic import（喺generateInvoicePDF/generateSignatureReportPDF/exportExcel/exportMyIncomeSheet入面用到先載入），
 // 減細首次載入嘅bundle size，唔影響任何功能
-import { cloudEnabled, cloudLoad, cloudSave, cloudSubscribe, SUPABASE_URL } from "./supabase.js";
+import { cloudEnabled, cloudLoad, cloudLoadStatus, cloudSave, cloudSaveBackup, cloudListBackups, cloudSubscribe, SUPABASE_URL } from "./supabase.js";
 import {
   ADMIN_TAB_KEYS, TIME_SLOTS, LS_KEY,
 } from "./constants.js";
@@ -190,17 +190,39 @@ export default function App() {
     if (d.expenseLog !== undefined) setExpenseLog(d.expenseLog);
   };
 
+  // 判斷一份資料係咪「空白／預設」：冇教練、冇預約、冇購買記錄。用嚟防止空白資料覆寫有內容嘅雲端。
+  const isEmptyState = (d) => !d || (
+    (!Array.isArray(d.coaches) || d.coaches.length === 0) &&
+    (!d.bookings || Object.keys(d.bookings).length === 0) &&
+    (!Array.isArray(d.purchaseLog) || d.purchaseLog.length === 0)
+  );
+  const allowWipeRef = useRef(false); // 只有用戶明確確認「重設所有資料」先會設為 true
+
   // 首次載入：雲端模式由雲端讀取（若雲端空白則上載目前本機資料），並訂閱即時變更
   useEffect(() => {
     if (!cloudEnabled) return;
     let unsub = () => {};
+    let cancelled = false;
     (async () => {
-      const remote = await cloudLoad();
+      // 讀取雲端：讀取「失敗」同「真係未有資料」要分開處理。
+      // 失敗（斷網／專案暫停／權限問題）絕不可以當雲端空白去上載本機資料——否則新瀏覽器／清過資料嘅裝置會用預設空白資料覆寫成份雲端（2026-11-06 事故）。
+      // 失敗就唔開放寫入，每10秒再試，直至讀到為止。
+      let res = await cloudLoadStatus();
+      while (!res.ok) {
+        if (cancelled) return;
+        setSyncState("error");
+        await new Promise((r) => setTimeout(r, 10000));
+        res = await cloudLoadStatus();
+      }
+      if (cancelled) return;
+      const remote = res.data;
       if (remote && Object.keys(remote).length) {
         lastSyncedRef.current = stableStringify(remote);
         applyBundle(remote);
+        // 讀到有內容嘅雲端資料，順手做一份當日備份（資料係空白就唔寫，避免洗走好嘅備份）
+        if (!isEmptyState(remote)) cloudSaveBackup(remote);
       } else {
-        // 雲端未有資料：將目前（本機／預設）資料推上去做初始
+        // 雲端真係未有 row（首次使用）：將目前（本機／預設）資料推上去做初始
         const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust, quickLinks };
         lastSyncedRef.current = stableStringify(seed);
         await cloudSave(seed);
@@ -214,7 +236,7 @@ export default function App() {
         applyBundle(d);
       });
     })();
-    return () => unsub();
+    return () => { cancelled = true; unsub(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -296,7 +318,14 @@ export default function App() {
       // 一般key：逐個top-level key比對，邊個key我哋本機真係改過（同上次同步嗰刻嘅值唔一樣），先用返本機嘅；
       // 冇改過嘅key，一律保留返雲端最新版本，等第二部裝置嘅改動唔會被冚走。
       // bookings：用返上面 mergeBookings 做slot-level嘅3-way merge，避免自動扣堂效果嘅雜訊誤觸發key-level覆寫。
-      const freshRemote = await cloudLoad();
+      const fresh = await cloudLoadStatus();
+      if (!fresh.ok) {
+        // 讀唔到雲端：唔可以盲目寫入（會冚走雲端現有資料）；排隊稍後再試
+        setSyncState("error");
+        if (retry < 5) saveTimer.current = setTimeout(() => attemptSync(retry + 1), Math.min(3000 * 2 ** retry, 30000));
+        return;
+      }
+      const freshRemote = fresh.data;
       const freshS = freshRemote ? stableStringify(freshRemote) : null;
       let toSave = bundle;
       if (freshRemote && freshS !== lastSyncedRef.current) {
@@ -334,6 +363,16 @@ export default function App() {
           setSyncConflictLog((prev) => [conflictEntry, ...prev].slice(0, 200)); // 淨係keep返最近200筆，避免log本身變成新嘅size負擔
         }
       }
+      // 最後一道防線：雲端有內容但準備寫入嘅係空白資料，而用戶並冇明確要求重設 → 擋住，並用雲端版本還原本機
+      if (!allowWipeRef.current && isEmptyState(toSave) && freshRemote && !isEmptyState(freshRemote)) {
+        console.warn("blocked empty overwrite");
+        applyBundle(freshRemote);
+        lastSyncedRef.current = stableStringify(freshRemote);
+        setSyncState("synced");
+        showToast("已阻止空白資料覆寫雲端，已用雲端版本還原", "error");
+        return;
+      }
+      allowWipeRef.current = false;
       const finalS = stableStringify(toSave);
       const ok = await cloudSave(toSave);
       if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
@@ -426,6 +465,8 @@ export default function App() {
   const [studentLogOpen, setStudentLogOpen] = useState(null);
   const [rosterSortMode, setRosterSortMode] = useState("custom"); // custom | used | remain | name
   const [resetModal, setResetModal] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState("");
+  const [cloudBackups, setCloudBackups] = useState(null); // null=未載入
   const [purgeDate, setPurgeDate] = useState("");
   const [purgeModal, setPurgeModal] = useState(false);
   const [settingsCategory, setSettingsCategory] = useState(null); // null=分類menu | coach|venue|account|data|other（2026-09重整：15個平舖pill太多，改做分類）
@@ -1976,6 +2017,38 @@ export default function App() {
     }
   };
 
+  // ── 完整備份（JSON）：包含所有資料（教練、預約、流水帳、支出、設定、密碼等），可完整還原 ──
+  const exportFullJson = () => {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) { showToast("本機未有資料可以備份", "error"); return; }
+      const blob = new Blob([raw], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `gymily-完整備份-${formatDate(new Date())}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      showToast("已匯出完整備份");
+    } catch (e) { showToast("匯出失敗：" + (e?.message || e), "error"); }
+  };
+  const describeBundle = (d) => `教練 ${(d.coaches || []).length} 位、預約時段 ${Object.keys(d.bookings || {}).length} 個、購買記錄 ${(d.purchaseLog || []).length} 筆、支出 ${(d.expenseLog || []).length} 筆`;
+  const restoreFromBundle = (d, label) => {
+    if (!d || typeof d !== "object" || !Array.isArray(d.coaches)) { showToast("呢個唔係有效嘅備份檔", "error"); return; }
+    if (!window.confirm(`確定用「${label}」還原？\n\n備份內容：${describeBundle(d)}\n\n現有資料會被備份內容取代，並同步到雲端。`)) return;
+    applyBundle(d);
+    showToast("已還原，正在同步到雲端");
+  };
+  const importFullJson = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try { restoreFromBundle(JSON.parse(String(reader.result)), file.name); }
+      catch (e) { showToast("讀取備份檔失敗：" + (e?.message || e), "error"); }
+    };
+    reader.readAsText(file);
+  };
+  const loadCloudBackups = async () => { setCloudBackups(await cloudListBackups()); };
+
   const exportExcel = async () => {
     try {
       const XLSX = await import("xlsx");
@@ -3215,7 +3288,33 @@ export default function App() {
 
                 {settingsCategory === "data" && (
                   <>
-                    <h2 style={S.sectionTitle}>匯出資料備份</h2>
+                    <h2 style={S.sectionTitle}>完整備份 / 還原</h2>
+                    <div style={S.formCard}>
+                      <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>下面嘅 Excel 匯出只係查數用，唔包密碼、支出、設定，亦唔可以還原。<strong>「完整備份」包晒所有資料，可以一鍵還原</strong>，建議每個月、大改動前都匯出一份，並存落 Google Drive。</p>
+                      <button style={{ ...S.loginBtn, background: "#4D96FF", color: "#fff" }} onClick={exportFullJson}>💾 匯出完整備份 (JSON)</button>
+                      {currentUser.role === "admin" && (
+                        <>
+                          <label style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff", marginTop: 10, display: "block", textAlign: "center", cursor: "pointer", boxSizing: "border-box" }}>
+                            📥 匯入完整備份還原
+                            <input type="file" accept="application/json,.json" style={{ display: "none" }} onChange={(e) => { importFullJson(e.target.files?.[0]); e.target.value = ""; }} />
+                          </label>
+                          <button style={{ ...S.loginBtn, background: "#2a2a2a", color: "#fff", marginTop: 10 }} onClick={loadCloudBackups}>☁️ 查看雲端自動備份（最近7日）</button>
+                          {cloudBackups && (cloudBackups.length === 0 ? <p style={{ ...S.assistHint, marginTop: 10 }}>暫時未有雲端自動備份（每次開 app 讀到有內容嘅資料時會自動備份當日一份）。</p> : (
+                            <div style={{ marginTop: 12 }}>
+                              {cloudBackups.map((b) => (
+                                <div key={b.id} style={{ background: "#1a1a1a", borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+                                  <div style={S.bookingTime}>{new Date(b.updated_at).toLocaleString("zh-HK")}</div>
+                                  <div style={{ fontSize: 13, color: "#aaa", margin: "4px 0 8px" }}>{describeBundle(b.data || {})}</div>
+                                  <button style={{ ...S.loginBtn, background: "#FFA500", color: "#000", padding: "8px 12px" }} onClick={() => restoreFromBundle(b.data, "雲端備份 " + new Date(b.updated_at).toLocaleDateString("zh-HK"))}>還原呢一份</button>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+
+                    <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>匯出資料（Excel，查數用）</h2>
                     <div style={S.formCard}>
                       <p style={{ ...S.bookingTime, marginBottom: 14, lineHeight: 1.6 }}>匯出檔案可直接用 Google Sheets 或 Excel 打開，包含教練總覽、全部流水帳、每個教練獨立流水帳、上堂記錄、包場小組記錄、取消記錄。建議定期備份。</p>
                       <button style={{ ...S.loginBtn, background: "#6BCB77" }} onClick={exportExcel}>📊 匯出 Google Sheet 備份</button>
@@ -3854,10 +3953,12 @@ export default function App() {
         {resetModal && (
           <div style={S.modalOverlay}><div style={S.modal}>
             <h3 style={S.modalTitle}>重設所有資料</h3>
-            <p style={S.modalText}>確定清除呢部裝置嘅所有資料（教練、預約、流水帳等），回復至初始狀態？<br /><br />此動作無法復原，建議先匯出備份。</p>
+            <p style={S.modalText}>⚠️ 呢個動作會清除<strong>所有裝置、雲端</strong>嘅資料（教練、預約、流水帳等），回復至初始狀態，而且無法復原。<br /><br />請先匯出「完整備份」。確定要重設，請喺下面輸入「重設」兩個字。</p>
+            <input style={{ ...S.input, marginBottom: 12 }} value={resetConfirmText} onChange={(e) => setResetConfirmText(e.target.value)} placeholder="輸入：重設" />
             <div style={S.modalBtns}>
-              <button style={S.modalCancel} onClick={() => setResetModal(false)}>返回</button>
-              <button style={{ ...S.modalConfirm, background: "#FF6B6B" }} onClick={() => {
+              <button style={S.modalCancel} onClick={() => { setResetModal(false); setResetConfirmText(""); }}>返回</button>
+              <button style={{ ...S.modalConfirm, background: "#FF6B6B", opacity: resetConfirmText.trim() === "重設" ? 1 : 0.4 }} disabled={resetConfirmText.trim() !== "重設"} onClick={() => {
+                allowWipeRef.current = true; setResetConfirmText("");
                 try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
                 setCoaches(DEFAULT_COACHES); setAdminPassword(DEFAULT_ADMIN_PASSWORD); setBookings({});
                 setSubAdmins(DEFAULT_SUBADMINS);
