@@ -4683,6 +4683,12 @@ export default function App() {
             )}
           </div>
 
+          <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>資料備份</h2>
+          <div style={S.formCard}>
+            <p style={{ ...S.bookingTime, marginBottom: 10, lineHeight: 1.6 }}>匯出呢部裝置上嘅完整資料備份（JSON），管理員有需要時可以用嚟還原。可以直接分享到 WhatsApp。</p>
+            <button style={{ ...S.loginBtn, background: "#4D96FF", color: "#fff" }} onClick={exportFullJson}>💾 匯出完整備份</button>
+          </div>
+
           <h2 style={{ ...S.sectionTitle, marginTop: 28 }}>學生名單</h2>
           <p style={S.assistHint}>撳學生名展開資料同上課紀錄。預約場地時可以直接揀名單入面嘅學生。</p>
           {roster.length > 1 && (
