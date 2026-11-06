@@ -2018,14 +2018,26 @@ export default function App() {
   };
 
   // ── 完整備份（JSON）：包含所有資料（教練、預約、流水帳、支出、設定、密碼等），可完整還原 ──
-  const exportFullJson = () => {
+  const exportFullJson = async () => {
     try {
       const raw = localStorage.getItem(LS_KEY);
       if (!raw) { showToast("本機未有資料可以備份", "error"); return; }
+      const fileName = `gymily-完整備份-${formatDate(new Date())}.json`;
       const blob = new Blob([raw], { type: "application/json" });
+      // 手機 app（特別係 iPhone 主畫面 app）直接下載經常冇反應，所以優先用分享表單（可以揀 WhatsApp、儲存到檔案、Google Drive）
+      try {
+        const file = new File([blob], fileName, { type: "application/json" });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: fileName });
+          showToast("已匯出完整備份");
+          return;
+        }
+      } catch (e) {
+        if (e?.name === "AbortError") return; // 用戶取消
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = `gymily-完整備份-${formatDate(new Date())}.json`;
+      a.href = url; a.download = fileName;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
       showToast("已匯出完整備份");
