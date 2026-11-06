@@ -25,6 +25,14 @@ create policy "app_records update" on public.app_records for update using (true)
 create policy "app_records delete" on public.app_records for delete using (true);
 grant select, insert, update, delete on public.app_records to anon, authenticated;
 
+-- updated_at 一律由資料庫蓋（唔信裝置時鐘），app 用佢做「最近有冇改動」嘅增量檢查
+create or replace function public.app_records_touch() returns trigger
+language plpgsql as $$ begin new.updated_at := now(); return new; end $$;
+drop trigger if exists app_records_touch on public.app_records;
+create trigger app_records_touch before insert or update on public.app_records
+  for each row execute function public.app_records_touch();
+create index if not exists app_records_updated_at on public.app_records (updated_at);
+
 -- 每日自動備份（以前放喺 app_state 嘅 backup-0…6，而家獨立一個表）
 create table if not exists public.app_backups (
   id         text primary key,
@@ -86,5 +94,5 @@ end $$;
 -- drop trigger if exists gymily_snapshot_trigger on public.app_records;
 -- create trigger gymily_snapshot_trigger after insert or update or delete on public.app_records
 --   for each statement execute function public.gymily_refresh_snapshot();
--- 4) 實時同步
+-- 4) 實時同步（已經喺測試時加咗）
 -- alter publication supabase_realtime add table public.app_records;

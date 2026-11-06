@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 // pdf-lib同xlsx改做dynamic import（喺generateInvoicePDF/generateSignatureReportPDF/exportExcel/exportMyIncomeSheet入面用到先載入），
 // 減細首次載入嘅bundle size，唔影響任何功能
 import { cloudEnabled, loadAllRecords, upsertRecords, deleteRecords, subscribeRecords, cloudSaveDailyBackup, cloudListBackups, SUPABASE_URL } from "./supabase.js";
-import { explode, implode, diff as diffRecords, mergeRemote, fullRefreshChanges, rowsToMap, rowKey, massChangeProblem } from "./recordSync.js";
+import { explode, implode, diff as diffRecords, mergeRemote, fullRefreshChanges, rowsToMap, rowKey, massChangeProblem, stableStringify as recStringify } from "./recordSync.js";
 import {
   ADMIN_TAB_KEYS, TIME_SLOTS, LS_KEY,
 } from "./constants.js";
@@ -220,13 +220,35 @@ export default function App() {
     let unsub = () => {};
     let cancelled = false;
     let hiddenAt = 0;
+    let maxUpdatedAt = "";
+    let pollTimer = null;
+    let subscribedOnce = false;
+    const noteRows = (rows) => rows.forEach((r) => { if (r.updated_at && r.updated_at > maxUpdatedAt) maxUpdatedAt = r.updated_at; });
+    const fullRefresh = async () => {
+      const res = await loadAllRecords();
+      if (res.ok && res.rows.some((r) => r.collection === "k")) { noteRows(res.rows); applyRemoteChanges(fullRefreshChanges(res.rows, syncedMapRef.current)); }
+    };
+    // 實時同步偶然會漏（例如手機網絡切換）：每分鐘輕量檢查一次「有冇記錄喺最近改過」，通常一行都冇，好慳流量
+    const poll = async () => {
+      if (readyRef.current && document.visibilityState === "visible" && maxUpdatedAt && !syncingRef.current) {
+        const since = new Date(Date.parse(maxUpdatedAt) - 15000).toISOString();
+        const res = await loadAllRecords(since);
+        if (res.ok && res.rows.length) {
+          noteRows(res.rows);
+          const changes = res.rows
+            .filter((r) => { const s = syncedMapRef.current.get(rowKey(r.collection, r.rid)); return !s || s.json !== recStringify(r.data); })
+            .map((r) => ({ type: "upsert", collection: r.collection, rid: r.rid, data: r.data }));
+          applyRemoteChanges(changes);
+        }
+      }
+      pollTimer = setTimeout(poll, 60000);
+    };
     const onVisibility = async () => {
-      // app 喺背景耐咗（實時連線可能斷過、漏咗改動）：返到前景就重新讀一次，逐行合併
+      // app 喺背景耐咗（實時連線可能斷過、漏咗改動，包括刪除）：返到前景就完整重新讀一次，逐行合併
       if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
       if (!readyRef.current || !hiddenAt || Date.now() - hiddenAt < 120000) return;
       hiddenAt = 0;
-      const res = await loadAllRecords();
-      if (res.ok && res.rows.some((r) => r.collection === "k")) applyRemoteChanges(fullRefreshChanges(res.rows, syncedMapRef.current));
+      fullRefresh();
     };
     (async () => {
       let res = await loadAllRecords();
@@ -238,6 +260,7 @@ export default function App() {
         res = await loadAllRecords();
       }
       if (cancelled) return;
+      noteRows(res.rows);
       const map = rowsToMap(res.rows);
       syncedMapRef.current = map;
       const remote = implode(map);
@@ -246,10 +269,14 @@ export default function App() {
       setSyncState("synced");
       // 每日自動備份（同一日已經做過就唔再上載；空白資料唔備份）
       if (!isEmptyState(remote)) cloudSaveDailyBackup(remote);
-      unsub = subscribeRecords((changes) => applyRemoteChanges(changes));
+      unsub = subscribeRecords((changes) => applyRemoteChanges(changes), (status) => {
+        // 實時連線斷咗再駁返：期間可能漏咗改動，完整重新讀一次
+        if (status === "SUBSCRIBED") { if (subscribedOnce) fullRefresh(); subscribedOnce = true; }
+      });
       document.addEventListener("visibilitychange", onVisibility);
+      pollTimer = setTimeout(poll, 60000);
     })();
-    return () => { cancelled = true; unsub(); document.removeEventListener("visibilitychange", onVisibility); };
+    return () => { cancelled = true; unsub(); if (pollTimer) clearTimeout(pollTimer); document.removeEventListener("visibilitychange", onVisibility); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

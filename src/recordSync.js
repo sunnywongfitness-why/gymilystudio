@@ -8,7 +8,13 @@
 //   collection "k"        → 每個 list / dict 嘅登記：{ kind:"list", order:[rid...] } 或 { kind:"dict" }
 //   collection "l:<key>"  → list 入面每一項，rid = "i:<id>"（有 id）或 "h:<內容hash>"（冇 id）
 //   collection "d:<key>"  → dict 入面每一個 entry，rid = 原本嘅 key（例如預約時段 "2026-11-06_15:30"）
-import { stableStringify } from "./helpers.js";
+// 同 helpers.js 嘅 stableStringify 完全一樣（object key 排序後先 stringify），抄一份喺度令呢個檔案唔使依賴其他模組
+export function stableStringify(obj) {
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return "[" + obj.map(stableStringify).join(",") + "]";
+  const keys = Object.keys(obj).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
+}
 
 export const rowKey = (collection, rid) => collection + "\u0000" + rid;
 
@@ -148,7 +154,7 @@ export const rowsToMap = (rows) => {
 };
 
 // 安全檢查：一次過刪走大量記錄，或者將有內容嘅資料變成空白，都要用戶明確確認先准（重設／還原／清理歷史）
-export function massChangeProblem(d, syncedMap, isEmptyState) {
+export function massChangeProblem(d, syncedMap) {
   const dataDeletes = d.deletes.filter((r) => r.collection !== "k" && r.collection !== "s");
   const total = [...syncedMap.values()].filter((r) => r.collection !== "k" && r.collection !== "s").length;
   if (dataDeletes.length > 30 && dataDeletes.length > total * 0.2) return `一次過刪除 ${dataDeletes.length} 筆記錄（共 ${total} 筆）`;

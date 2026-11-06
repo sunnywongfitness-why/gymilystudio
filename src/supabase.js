@@ -15,13 +15,16 @@ const PAGE = 1000;   // PostgREST 每次最多回傳 1000 行，要分頁
 const UPSERT_CHUNK = 400;
 const DELETE_CHUNK = 100;
 
-// 讀取全部記錄。任何一頁失敗都當成「讀取失敗」（{ ok:false }），絕不可以當成雲端空白。
-export async function loadAllRecords() {
+// 讀取全部記錄（或者 since 之後有改動嘅記錄）。任何一頁失敗都當成「讀取失敗」（{ ok:false }），絕不可以當成雲端空白。
+// updated_at 由資料庫自己蓋（唔信裝置時鐘），所以可以用嚟做「之後有冇改動」嘅增量檢查。
+export async function loadAllRecords(since) {
   if (!supa) return { ok: false, rows: [] };
   const rows = [];
   try {
     for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supa.from(RECORDS).select("collection,rid,data")
+      let q = supa.from(RECORDS).select("collection,rid,data,updated_at");
+      if (since) q = q.gt("updated_at", since);
+      const { data, error } = await q
         .order("collection", { ascending: true }).order("rid", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) { console.error("loadAllRecords", error); return { ok: false, rows: [] }; }
