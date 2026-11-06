@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 // pdf-lib同xlsx改做dynamic import（喺generateInvoicePDF/generateSignatureReportPDF/exportExcel/exportMyIncomeSheet入面用到先載入），
 // 減細首次載入嘅bundle size，唔影響任何功能
-import { cloudEnabled, cloudLoad, cloudLoadStatus, cloudSave, cloudSaveBackup, cloudListBackups, cloudSubscribe, SUPABASE_URL } from "./supabase.js";
+import { cloudEnabled, loadAllRecords, upsertRecords, deleteRecords, subscribeRecords, cloudSaveDailyBackup, cloudListBackups, SUPABASE_URL } from "./supabase.js";
+import { explode, implode, diff as diffRecords, mergeRemote, fullRefreshChanges, rowsToMap, rowKey, massChangeProblem } from "./recordSync.js";
 import {
   ADMIN_TAB_KEYS, TIME_SLOTS, LS_KEY,
 } from "./constants.js";
@@ -145,8 +146,6 @@ export default function App() {
   const [expandedCleaningTaskKeys, setExpandedCleaningTaskKeys] = useState([]); // 清潔輪流工作摺埋咗邊幾個已經展開（2026-09新增）
   const [syncState, setSyncState] = useState(cloudEnabled ? "connecting" : "local"); // connecting | synced | local | error
 
-  // 同步用：記住最後一次「已儲存／已收到」嘅內容，避免回音造成無限迴圈
-  const lastSyncedRef = useRef(null);
   const readyRef = useRef(!cloudEnabled); // 雲端模式要等首次載入完成先準許寫入
   const saveTimer = useRef(null);
   const receiptImgRef = useRef(null); // 憑證相已load嘅Image object快取，避免redraw要重新load（唔係React state，唔會觸發re-render）
@@ -196,190 +195,113 @@ export default function App() {
     (!d.bookings || Object.keys(d.bookings).length === 0) &&
     (!Array.isArray(d.purchaseLog) || d.purchaseLog.length === 0)
   );
-  const allowWipeRef = useRef(false); // 只有用戶明確確認「重設所有資料」先會設為 true
+  // 只有用戶明確確認「重設所有資料」「還原備份」「清理歷史資料」先會設為 true，准許一次過大量刪除
+  const allowMassRef = useRef(false);
 
-  // 首次載入：雲端模式由雲端讀取（若雲端空白則上載目前本機資料），並訂閱即時變更
+  // ===== 逐筆記錄同步（2026-11 拆分）=====
+  // syncedMapRef：雲端而家有咩記錄（上次讀到／寫入成功嘅版本）。改動時只會上載同佢唔同嘅記錄。
+  // bundleRef：app 最新嘅資料，俾收到其他裝置改動嗰陣做逐行合併。
+  const syncedMapRef = useRef(new Map());
+  const bundleRef = useRef(null);
+  const syncingRef = useRef(false);
+  const syncPendingRef = useRef(false);
+
+  // 收到雲端改動（實時同步或者重新載入）：逐行 3-way 合併。本機冇改過嘅行用雲端版本；本機改緊未上載嘅行保留本機。
+  const applyRemoteChanges = (changes) => {
+    if (!changes || changes.length === 0 || !bundleRef.current) return;
+    const res = mergeRemote(explode(bundleRef.current), syncedMapRef.current, changes);
+    syncedMapRef.current = res.syncedMap;
+    if (res.touchedKeys.length) applyBundle(implode(res.localMap, res.touchedKeys));
+  };
+
+  // 首次載入：讀晒所有記錄。讀取失敗、或者雲端未有任何記錄，都唔會寫入任何嘢（每10秒再試）。
   useEffect(() => {
     if (!cloudEnabled) return;
     let unsub = () => {};
     let cancelled = false;
+    let hiddenAt = 0;
+    const onVisibility = async () => {
+      // app 喺背景耐咗（實時連線可能斷過、漏咗改動）：返到前景就重新讀一次，逐行合併
+      if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+      if (!readyRef.current || !hiddenAt || Date.now() - hiddenAt < 120000) return;
+      hiddenAt = 0;
+      const res = await loadAllRecords();
+      if (res.ok && res.rows.some((r) => r.collection === "k")) applyRemoteChanges(fullRefreshChanges(res.rows, syncedMapRef.current));
+    };
     (async () => {
-      // 讀取雲端：讀取「失敗」同「真係未有資料」要分開處理。
-      // 失敗（斷網／專案暫停／權限問題）絕不可以當雲端空白去上載本機資料——否則新瀏覽器／清過資料嘅裝置會用預設空白資料覆寫成份雲端（2026-11-06 事故）。
-      // 失敗就唔開放寫入，每10秒再試，直至讀到為止。
-      let res = await cloudLoadStatus();
-      while (!res.ok) {
+      let res = await loadAllRecords();
+      // 冇任何登記記錄（collection "k"）＝ 雲端仲未搬資料／讀到唔完整：當讀取失敗處理，絕不上載本機資料
+      while (!res.ok || !res.rows.some((r) => r.collection === "k")) {
         if (cancelled) return;
         setSyncState("error");
         await new Promise((r) => setTimeout(r, 10000));
-        res = await cloudLoadStatus();
+        res = await loadAllRecords();
       }
       if (cancelled) return;
-      const remote = res.data;
-      if (remote && Object.keys(remote).length) {
-        lastSyncedRef.current = stableStringify(remote);
-        applyBundle(remote);
-        // 讀到有內容嘅雲端資料，順手做一份當日備份（資料係空白就唔寫，避免洗走好嘅備份）
-        if (!isEmptyState(remote)) cloudSaveBackup(remote);
-      } else {
-        // 雲端真係未有 row（首次使用）：將目前（本機／預設）資料推上去做初始
-        const seed = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust, quickLinks };
-        lastSyncedRef.current = stableStringify(seed);
-        await cloudSave(seed);
-      }
+      const map = rowsToMap(res.rows);
+      syncedMapRef.current = map;
+      const remote = implode(map);
+      applyBundle(remote);
       readyRef.current = true;
       setSyncState("synced");
-      unsub = cloudSubscribe((d) => {
-        const s = stableStringify(d);
-        if (s === lastSyncedRef.current) return; // 自己嘅更新，略過
-        lastSyncedRef.current = s;
-        applyBundle(d);
-      });
+      // 每日自動備份（同一日已經做過就唔再上載；空白資料唔備份）
+      if (!isEmptyState(remote)) cloudSaveDailyBackup(remote);
+      unsub = subscribeRecords((changes) => applyRemoteChanges(changes));
+      document.addEventListener("visibilitychange", onVisibility);
     })();
-    return () => { cancelled = true; unsub(); };
+    return () => { cancelled = true; unsub(); document.removeEventListener("visibilitychange", onVisibility); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 3-way merge 專門處理 bookings：唔可以淨係睇「成個bookings key改咗未」就決定用邊份——
-  // 因為「自動扣學生堂數」嗰個useEffect（§169附近）會不定時、同取消/新booking呢類操作完全無關咁郁一郁bookings入面嘅autoDeducted flag，
-  // 令bookings成個key睇落「本機改咗」，如果淨係做key-level merge，就會將呢個「郁咗」誤判做要保留本機版本，連埋第二部裝置啱啱先取消/新增嘅booking都一齊冚走。
-  // 改做逐個 date_time slot 比較：邊個slot本機真係改咗（同上次同步唔同）先用本機，冇改過嘅slot一律用返雲端最新版本（保留第二部裝置嘅改動，包括「呢個slot俾人取消咗、雲端已經冇咗」嘅情況）。
-  const mergeBookings = (remoteBookings, localBookings, lastSyncedBookings) => {
-    const merged = {};
-    let localCount = 0, remoteCount = 0;
-    const allKeys = new Set([...Object.keys(remoteBookings || {}), ...Object.keys(localBookings || {})]);
-    allKeys.forEach((key) => {
-      const remoteArr = remoteBookings ? remoteBookings[key] : undefined;
-      const localArr = localBookings ? localBookings[key] : undefined;
-      const lastArr = lastSyncedBookings ? lastSyncedBookings[key] : undefined;
-      if (remoteArr === undefined && localArr === undefined) return;
-      if (remoteArr === undefined) {
-        // 雲端冇呢個slot：如果上次同步都已經冇（即係本機啱啱先新增嘅），保留本機；
-        // 如果上次同步有（即係第二部裝置攞走咗/取消咗），尊重雲端，唔好搬本機舊版本返去
-        if (lastArr === undefined) { merged[key] = localArr; localCount++; }
-        return;
-      }
-      if (localArr === undefined) { merged[key] = remoteArr; remoteCount++; return; }
-      const remoteChanged = stableStringify(remoteArr) !== stableStringify(lastArr);
-      const localChanged = stableStringify(localArr) !== stableStringify(lastArr);
-      if (localChanged && !remoteChanged) { merged[key] = localArr; localCount++; }
-      else { merged[key] = remoteArr; if (remoteChanged) remoteCount++; }
-    });
-    return { merged, localCount, remoteCount };
-  };
-
-  // 通用嘅「逐筆記錄按id」3-way merge，畀expenseLog（同其他未來想加嘅高頻log）用：
-  // 同 mergeBookings 一樣嘅道理——唔可以淨係睇「成個array改咗未」就決定用邊份，
-  // 因為兩個admin/副管理員可能真係會撞到同一時間各自新增緊唔同筆支出，粗略per-key merge會冚走其中一份。
-  // 逐個id比較：邊筆本機真係改咗（同上次同步唔同）先用本機，冇改過嘅一律用返雲端最新版本。
-  const mergeLogById = (remoteList, localList, lastList) => {
-    const toMap = (list) => { const m = {}; (list || []).forEach((r) => { if (r && r.id !== undefined) m[r.id] = r; }); return m; };
-    const remoteMap = toMap(remoteList), localMap = toMap(localList), lastMap = toMap(lastList);
-    const merged = {};
-    let localCount = 0, remoteCount = 0;
-    const allIds = new Set([...Object.keys(remoteMap), ...Object.keys(localMap)]);
-    allIds.forEach((id) => {
-      const r = remoteMap[id], l = localMap[id], last = lastMap[id];
-      if (r === undefined && l === undefined) return;
-      if (r === undefined) {
-        // 雲端冇呢筆：上次同步都已經冇（本機啱啱先新增）就保留本機；上次同步有（第二部裝置刪走咗）就尊重雲端
-        if (last === undefined) { merged[id] = l; localCount++; }
-        return;
-      }
-      if (l === undefined) { merged[id] = r; remoteCount++; return; }
-      const remoteChanged = stableStringify(r) !== stableStringify(last);
-      const localChanged = stableStringify(l) !== stableStringify(last);
-      if (localChanged && !remoteChanged) { merged[id] = l; localCount++; }
-      else { merged[id] = r; if (remoteChanged) remoteCount++; }
-    });
-    // 保持「新到舊」排序（跟其他log嘅prepend慣例），用 at 時間戳排；冇 at 就當最舊
-    const list = Object.values(merged).sort((a, b) => (b.at || "").localeCompare(a.at || ""));
-    return { merged: list, localCount, remoteCount };
-  };
-
-  // 任何資料變更時儲存（雲端 or 本機）
+  // 任何資料變更時儲存：本機存一份完整副本；雲端就只上載改過嘅記錄、刪除已經冇咗嘅記錄
   useEffect(() => {
     const bundle = { coaches, adminPassword, whatsappNumber, venueNotice, paymentQR, adminPhone, suggestionBox, adminCalendarToken, signatureStore, filmingNotices, retroBookingNotices, passUsageLog, invoiceCounter, subAdmins, bookings, purchaseLog, studentPurchaseLog, charterLog, assistCancelLog, cancelLog, drinkProducts, drinkSalesLog, adjustLog, expenseLog, textTemplates, syncConflictLog, cleaningParticipants, cleaningTasks, cleaningLog, trialParticipants, trialCountAdjust, quickLinks };
-    // 本機永遠都存一份（離線後備）
+    bundleRef.current = bundle;
+    // 本機永遠都存一份（離線後備、完整備份匯出用）
     try { localStorage.setItem(LS_KEY, JSON.stringify(bundle)); } catch (e) { /* ignore */ }
 
     if (!cloudEnabled) return;
-    if (!readyRef.current) return; // 首次雲端載入未完成，唔好覆蓋
-    const s = stableStringify(bundle);
-    if (s === lastSyncedRef.current) return; // 同雲端一樣，唔使寫
+    if (!readyRef.current) return; // 首次雲端載入未完成，唔好寫
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    // attemptSync：抽埋做named function，寫入失敗（例如斷網）嗰陣可以自動排隊重試，
-    // 唔使再靠「等你落次郁第二樣嘢先再觸發」——之前呢個做法會令失敗嗰筆嘢一直淨係留喺本機、雲端遲遲收唔到（2026-09修正）
     const attemptSync = async (retry = 0) => {
-      setSyncState("connecting");
-      // 寫入前先重新讀一次雲端而家嘅內容：如果同「我哋上次同步嗰刻」已經唔一樣，
-      // 即係話呢段時間內有第二部裝置都寫入過——唔可以再盲目成份bundle覆寫，會整走人哋嘅改動（lost update）。
-      // 一般key：逐個top-level key比對，邊個key我哋本機真係改過（同上次同步嗰刻嘅值唔一樣），先用返本機嘅；
-      // 冇改過嘅key，一律保留返雲端最新版本，等第二部裝置嘅改動唔會被冚走。
-      // bookings：用返上面 mergeBookings 做slot-level嘅3-way merge，避免自動扣堂效果嘅雜訊誤觸發key-level覆寫。
-      const fresh = await cloudLoadStatus();
-      if (!fresh.ok) {
-        // 讀唔到雲端：唔可以盲目寫入（會冚走雲端現有資料）；排隊稍後再試
-        setSyncState("error");
-        if (retry < 5) saveTimer.current = setTimeout(() => attemptSync(retry + 1), Math.min(3000 * 2 ** retry, 30000));
-        return;
-      }
-      const freshRemote = fresh.data;
-      const freshS = freshRemote ? stableStringify(freshRemote) : null;
-      let toSave = bundle;
-      if (freshRemote && freshS !== lastSyncedRef.current) {
-        let lastSynced = {};
-        try { lastSynced = JSON.parse(lastSyncedRef.current) || {}; } catch (e) { /* ignore */ }
-        const merged = { ...freshRemote };
-        const keysLocal = [], keysRemote = [];
-        let bookingSlotsLocal = 0, bookingSlotsRemote = 0;
-        Object.keys(bundle).forEach((key) => {
-          if (key === "syncConflictLog") return; // 呢個key自己就係記錄用，唔使當做要merge嘅業務資料
-          if (key === "bookings") {
-            const r = mergeBookings(freshRemote.bookings, bundle.bookings, lastSynced.bookings);
-            merged.bookings = r.merged;
-            bookingSlotsLocal = r.localCount; bookingSlotsRemote = r.remoteCount;
-            if (r.localCount > 0) keysLocal.push(`bookings(${r.localCount}個時段)`);
-            if (r.remoteCount > 0) keysRemote.push(`bookings(${r.remoteCount}個時段)`);
-            return;
-          }
-          if (key === "expenseLog") {
-            const r = mergeLogById(freshRemote.expenseLog, bundle.expenseLog, lastSynced.expenseLog);
-            merged.expenseLog = r.merged;
-            if (r.localCount > 0) keysLocal.push(`expenseLog(${r.localCount}筆)`);
-            if (r.remoteCount > 0) keysRemote.push(`expenseLog(${r.remoteCount}筆)`);
-            return;
-          }
-          const localChanged = stableStringify(bundle[key]) !== stableStringify(lastSynced[key]);
-          if (localChanged) { merged[key] = bundle[key]; keysLocal.push(key); }
-          else if (stableStringify(freshRemote[key]) !== stableStringify(lastSynced[key])) keysRemote.push(key);
-        });
-        toSave = merged;
-        applyBundle(merged); // 本機都要即刻同步返merge之後嘅結果，等第二部裝置嗰邊嘅改動都反映落本機
-        if (keysLocal.length > 0 && keysRemote.length > 0) {
-          // 兩邊都真係有改動先算「撞」，記低一筆，等唔使人手逼都可以事後查返有冇撞過、撞緊咩
-          const conflictEntry = { at: nowStamp(), keysLocal, keysRemote, bookingSlotsLocal, bookingSlotsRemote };
-          setSyncConflictLog((prev) => [conflictEntry, ...prev].slice(0, 200)); // 淨係keep返最近200筆，避免log本身變成新嘅size負擔
+      if (syncingRef.current) { syncPendingRef.current = true; return; } // 上一次未寫完，寫完再嚟
+      const localMap = explode(bundleRef.current);
+      const d = diffRecords(localMap, syncedMapRef.current);
+      if (d.upserts.length === 0 && d.deletes.length === 0) { setSyncState("synced"); return; }
+      // 安全檢查：一次過刪大量記錄、或者將有內容嘅資料變成空白 → 除非用戶明確確認，否則擋住，並用雲端版本還原本機
+      if (!allowMassRef.current) {
+        const problem = massChangeProblem(d, syncedMapRef.current);
+        const wiping = isEmptyState(implode(localMap, ["coaches", "bookings", "purchaseLog"])) && !isEmptyState(implode(syncedMapRef.current, ["coaches", "bookings", "purchaseLog"]));
+        if (problem || wiping) {
+          console.warn("blocked mass change:", problem || "清空資料");
+          applyBundle(implode(syncedMapRef.current));
+          setSyncState("synced");
+          showToast("已阻止大量刪除資料（" + (problem || "清空資料") + "），已用雲端版本還原", "error");
+          return;
         }
       }
-      // 最後一道防線：雲端有內容但準備寫入嘅係空白資料，而用戶並冇明確要求重設 → 擋住，並用雲端版本還原本機
-      if (!allowWipeRef.current && isEmptyState(toSave) && freshRemote && !isEmptyState(freshRemote)) {
-        console.warn("blocked empty overwrite");
-        applyBundle(freshRemote);
-        lastSyncedRef.current = stableStringify(freshRemote);
-        setSyncState("synced");
-        showToast("已阻止空白資料覆寫雲端，已用雲端版本還原", "error");
-        return;
+      syncingRef.current = true;
+      setSyncState("connecting");
+      // 先寫新增／修改，再刪除：中途斷線最多會短暫見到重複，唔會唔見資料
+      const up = await upsertRecords(d.upserts);
+      up.done.forEach((r) => syncedMapRef.current.set(rowKey(r.collection, r.rid), r));
+      let ok = up.ok;
+      if (ok) {
+        const del = await deleteRecords(d.deletes);
+        del.done.forEach((r) => syncedMapRef.current.delete(rowKey(r.collection, r.rid)));
+        ok = del.ok;
       }
-      allowWipeRef.current = false;
-      const finalS = stableStringify(toSave);
-      const ok = await cloudSave(toSave);
-      if (ok) { lastSyncedRef.current = finalS; setSyncState("synced"); }
-      else {
+      syncingRef.current = false;
+      if (ok) {
+        allowMassRef.current = false;
+        setSyncState("synced");
+        if (syncPendingRef.current) { syncPendingRef.current = false; attemptSync(0); }
+      } else {
         setSyncState("error");
-        // 失敗唔更新lastSyncedRef；自動隔一排（3s、6s、12s...封頂30s）再試，試夠5次為止
-        if (retry < 5) saveTimer.current = setTimeout(() => attemptSync(retry + 1), Math.min(3000 * 2 ** retry, 30000));
+        // 失敗：隔一排（3s、6s、12s...封頂30s）再試，每次都重新計一次要上載乜嘢
+        syncPendingRef.current = false;
+        if (retry < 8) saveTimer.current = setTimeout(() => attemptSync(retry + 1), Math.min(3000 * 2 ** retry, 30000));
       }
     };
     saveTimer.current = setTimeout(() => attemptSync(0), 500);
@@ -905,6 +827,7 @@ export default function App() {
     return { bookingCount, cancelCount, purchaseCount, charterCount, drinkCount, passUsageCount, studentPurchaseCount, signatureCount, total };
   };
   const purgeHistoryBefore = (cutoff) => {
+    allowMassRef.current = true; // 清理歷史資料係用戶明確確認嘅大量刪除
     setBookings((prev) => {
       const next = {};
       Object.entries(prev).forEach(([k, arr]) => { if (k.split("_")[0] > cutoff) next[k] = arr; });
@@ -2047,6 +1970,7 @@ export default function App() {
   const restoreFromBundle = (d, label) => {
     if (!d || typeof d !== "object" || !Array.isArray(d.coaches)) { showToast("呢個唔係有效嘅備份檔", "error"); return; }
     if (!window.confirm(`確定用「${label}」還原？\n\n備份內容：${describeBundle(d)}\n\n現有資料會被備份內容取代，並同步到雲端。`)) return;
+    allowMassRef.current = true; // 還原係用戶明確確認嘅大量改動
     applyBundle(d);
     showToast("已還原，正在同步到雲端");
   };
@@ -3970,7 +3894,7 @@ export default function App() {
             <div style={S.modalBtns}>
               <button style={S.modalCancel} onClick={() => { setResetModal(false); setResetConfirmText(""); }}>返回</button>
               <button style={{ ...S.modalConfirm, background: "#FF6B6B", opacity: resetConfirmText.trim() === "重設" ? 1 : 0.4 }} disabled={resetConfirmText.trim() !== "重設"} onClick={() => {
-                allowWipeRef.current = true; setResetConfirmText("");
+                allowMassRef.current = true; setResetConfirmText("");
                 try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
                 setCoaches(DEFAULT_COACHES); setAdminPassword(DEFAULT_ADMIN_PASSWORD); setBookings({});
                 setSubAdmins(DEFAULT_SUBADMINS);

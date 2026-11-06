@@ -7,37 +7,101 @@ export { SUPABASE_URL };
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 export const supa = cloudEnabled ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
-const ROW_ID = "main";
+// 2026-11 拆分：資料改為逐筆記錄存喺 app_records（每位教練、每個預約時段、每筆記錄各自一行）。
+// app_state.main 變成由資料庫 trigger 自動砌出嚟嘅快照（俾日曆 feed 用），app 唔會再寫佢。
+const RECORDS = "app_records";
+const BACKUPS = "app_backups";
+const PAGE = 1000;   // PostgREST 每次最多回傳 1000 行，要分頁
+const UPSERT_CHUNK = 400;
+const DELETE_CHUNK = 100;
 
-// 讀取雲端資料（回傳 data 物件，或 null）
-export async function cloudLoad() {
-  if (!supa) return null;
-  const { data, error } = await supa.from("app_state").select("data").eq("id", ROW_ID).maybeSingle();
-  if (error) { console.error("cloudLoad", error); return null; }
-  return data ? data.data : null;
-}
-
-// 讀取雲端資料，並分清「讀取出錯」同「真係冇資料」：
-//   { ok:false }            → 讀取失敗（斷網、專案暫停、權限等），絕不可以當作雲端空白
-//   { ok:true, data:null }  → 讀取成功，但雲端真係未有呢個 row（首次使用）
-//   { ok:true, data:{...} } → 正常
-export async function cloudLoadStatus() {
-  if (!supa) return { ok: false, data: null };
+// 讀取全部記錄。任何一頁失敗都當成「讀取失敗」（{ ok:false }），絕不可以當成雲端空白。
+export async function loadAllRecords() {
+  if (!supa) return { ok: false, rows: [] };
+  const rows = [];
   try {
-    const { data, error } = await supa.from("app_state").select("data").eq("id", ROW_ID).maybeSingle();
-    if (error) { console.error("cloudLoad", error); return { ok: false, data: null }; }
-    return { ok: true, data: data ? data.data : null };
-  } catch (e) { console.error("cloudLoad", e); return { ok: false, data: null }; }
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supa.from(RECORDS).select("collection,rid,data")
+        .order("collection", { ascending: true }).order("rid", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) { console.error("loadAllRecords", error); return { ok: false, rows: [] }; }
+      rows.push(...(data || []));
+      if (!data || data.length < PAGE) break;
+    }
+    return { ok: true, rows };
+  } catch (e) { console.error("loadAllRecords", e); return { ok: false, rows: [] }; }
 }
 
-// 每日自動備份：喺同一個 table 用 id = backup-0 … backup-6（按星期幾輪流覆蓋，永遠保留最近7日）。
-// 只會喺「資料唔係空白」嗰陣先寫，避免空白資料洗走好嘅備份。失敗唔影響正常運作。
-export async function cloudSaveBackup(payload) {
+// 新增／更新記錄（分批）。回傳成功寫入咗嘅記錄（失敗嗰批之後嘅唔算）。
+export async function upsertRecords(rows) {
+  const done = [];
+  if (!supa) return { ok: false, done };
+  const now = new Date().toISOString();
+  for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
+    const batch = rows.slice(i, i + UPSERT_CHUNK);
+    try {
+      const { error } = await supa.from(RECORDS)
+        .upsert(batch.map((r) => ({ collection: r.collection, rid: r.rid, data: r.data, updated_at: now })), { onConflict: "collection,rid" });
+      if (error) { console.error("upsertRecords", error); return { ok: false, done }; }
+    } catch (e) { console.error("upsertRecords", e); return { ok: false, done }; }
+    done.push(...batch);
+  }
+  return { ok: true, done };
+}
+
+// 刪除記錄（按 collection 分組、分批）
+export async function deleteRecords(rows) {
+  const done = [];
+  if (!supa) return { ok: false, done };
+  const byCol = {};
+  rows.forEach((r) => { (byCol[r.collection] = byCol[r.collection] || []).push(r); });
+  for (const col of Object.keys(byCol)) {
+    const list = byCol[col];
+    for (let i = 0; i < list.length; i += DELETE_CHUNK) {
+      const batch = list.slice(i, i + DELETE_CHUNK);
+      try {
+        const { error } = await supa.from(RECORDS).delete().eq("collection", col).in("rid", batch.map((r) => r.rid));
+        if (error) { console.error("deleteRecords", error); return { ok: false, done }; }
+      } catch (e) { console.error("deleteRecords", e); return { ok: false, done }; }
+      done.push(...batch);
+    }
+  }
+  return { ok: true, done };
+}
+
+// 訂閱其他裝置嘅改動。短時間內嘅多個改動會一齊交出（80ms）。
+// onChanges([{ type: "upsert" | "delete", collection, rid, data }])；onStatus("SUBSCRIBED" | "CHANNEL_ERROR" | ...)
+export function subscribeRecords(onChanges, onStatus) {
+  if (!supa) return () => {};
+  let queue = [], timer = null;
+  const flush = () => { const q = queue; queue = []; timer = null; if (q.length) onChanges(q); };
+  const ch = supa
+    .channel("app_records_changes")
+    .on("postgres_changes", { event: "*", schema: "public", table: RECORDS }, (payload) => {
+      if (payload.eventType === "DELETE") {
+        const o = payload.old || {};
+        if (o.collection !== undefined && o.rid !== undefined) queue.push({ type: "delete", collection: o.collection, rid: o.rid });
+      } else {
+        const n = payload.new || {};
+        if (n.collection !== undefined && n.rid !== undefined) queue.push({ type: "upsert", collection: n.collection, rid: n.rid, data: n.data });
+      }
+      if (!timer) timer = setTimeout(flush, 80);
+    })
+    .subscribe((status) => { if (onStatus) onStatus(status); });
+  return () => { try { if (timer) clearTimeout(timer); supa.removeChannel(ch); } catch (e) { /* ignore */ } };
+}
+
+// 每日自動備份：id = backup-0 … backup-6（按星期幾輪流覆蓋，保留最近7日）。
+// 同一日已經備份過就唔再上載（慳手機流量）；資料係空白嘅就唔好叫呢個 function。
+export async function cloudSaveDailyBackup(payload) {
   if (!supa) return false;
   try {
     const id = "backup-" + new Date().getDay();
-    const { error } = await supa.from("app_state").upsert({ id, data: payload, updated_at: new Date().toISOString() });
-    if (error) { console.error("cloudSaveBackup", error); return false; }
+    const today = new Date().toDateString();
+    const { data: existing } = await supa.from(BACKUPS).select("updated_at").eq("id", id).maybeSingle();
+    if (existing && new Date(existing.updated_at).toDateString() === today) return true;
+    const { error } = await supa.from(BACKUPS).upsert({ id, data: payload, updated_at: new Date().toISOString() });
+    if (error) { console.error("cloudSaveDailyBackup", error); return false; }
     return true;
   } catch (e) { return false; }
 }
@@ -46,27 +110,8 @@ export async function cloudSaveBackup(payload) {
 export async function cloudListBackups() {
   if (!supa) return [];
   try {
-    const { data, error } = await supa.from("app_state").select("id,data,updated_at").like("id", "backup-%");
+    const { data, error } = await supa.from(BACKUPS).select("id,data,updated_at");
     if (error) { console.error("cloudListBackups", error); return []; }
     return (data || []).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
   } catch (e) { return []; }
-}
-
-// 寫入雲端資料（整份覆蓋）
-export async function cloudSave(payload) {
-  if (!supa) return false;
-  const { error } = await supa.from("app_state").upsert({ id: ROW_ID, data: payload, updated_at: new Date().toISOString() });
-  if (error) { console.error("cloudSave", error); return false; }
-  return true;
-}
-
-// 訂閱雲端變更（其他裝置改咗會即時收到）
-export function cloudSubscribe(onChange) {
-  if (!supa) return () => {};
-  const ch = supa
-    .channel("app_state_changes")
-    .on("postgres_changes", { event: "*", schema: "public", table: "app_state", filter: `id=eq.${ROW_ID}` },
-      (payload) => { if (payload.new && payload.new.data) onChange(payload.new.data); })
-    .subscribe();
-  return () => { try { supa.removeChannel(ch); } catch (e) { /* ignore */ } };
 }
